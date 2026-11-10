@@ -14,6 +14,16 @@ and the tower are glTF models in `models/`.
 - Cessna 182 Skylane by VTX (CC BY-NC-SA 4.0): https://sketchfab.com/VTX_car
 - Gulfstream G650ER by Luca Martina (CC BY 4.0): https://sketchfab.com/LucaMartina
 - Delhi ATC tower: built for the AviationSpot360 site
+- Jet Engine (mentor's desk) by Pilot (CC BY 4.0): https://sketchfab.com/playerhack
+- Residential Furniture by ATD-London (CC BY 4.0), pieces cut from it: https://sketchfab.com/ATD-London
+- Bookshelf [CC0] by Crew Froebel (CC BY 4.0): https://sketchfab.com/crufro
+- Sky, HDRI and surface textures: Poly Haven (CC0), https://polyhaven.com
+
+## Engine simulator
+
+`engine/cfm56.html` is a CFM56-5B4 turbofan built with the teardown kit (https://github.com/elvarofficial/teardown,
+MIT; kit and review rules from whaleyxbt/claude-motion, MIT). Every limit and rating comes from EASA Type-Certificate
+Data Sheet E.003, Issue 06 (9 January 2023); the power schedule between those limits is modelled and labelled so.
 
 ## Live radar data
 

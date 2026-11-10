@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=9" />
+  <link rel="stylesheet" href="style.css?v=11" />
   <script type="importmap">
     { "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
@@ -64,6 +64,7 @@
     <p class="room-card__lede" data-f="lede"></p>
     <ul class="room-card__list" data-f="points"></ul>
     <div class="room-card__actions">
+      <button class="btn" type="button" id="engineOpen" hidden>Open engine simulator</button>
       <a class="btn" href="https://nikunj69420.github.io/aviationspot/#board">Join early access</a>
       <button class="btn btn--ghost" type="button" id="roomBack"><span aria-hidden="true">←</span> Back to lobby</button>
     </div>
@@ -78,6 +79,11 @@
     <button class="btn btn--ghost" type="button" id="radarBack"><span aria-hidden="true">←</span> Back to lobby</button>
   </div>
 
+  <div class="engine-ov" id="engineOv" hidden>
+    <iframe title="CFM56-5B4 turbofan simulator" loading="lazy" allow="fullscreen"></iframe>
+    <button class="btn btn--ghost engine-ov__close" type="button" id="engineClose"><span aria-hidden="true">✕</span> Close</button>
+  </div>
+
   <div class="progress" aria-hidden="true"><span id="progressFill"></span></div>
 
   <main class="track" id="track" aria-label="A walk from the campus entrance into the reception lobby"></main>
@@ -85,6 +91,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/ScrollTrigger.min.js"></script>
   <script src="https://unpkg.com/lenis@1.1.13/dist/lenis.min.js"></script>
-  <script type="module" src="main.js?v=21"></script>
+  <script type="module" src="main.js?v=35"></script>
 </body>
 </html>

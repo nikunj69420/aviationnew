@@ -3,6 +3,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
@@ -50,7 +51,8 @@ const HORIZON = new THREE.Color('#7c7590');
 scene.fog = new THREE.Fog(HORIZON, 34, 150);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.05, 3200);
-const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
+// 4x is plenty at these viewing angles; 16x on every big textured floor and wall triples the frame time on integrated GPUs
+const MAX_ANISO = Math.min(4, renderer.capabilities.getMaxAnisotropy());
 
 /* ---------- Small helpers ---------- */
 function mulberry32(a) {
@@ -516,6 +518,7 @@ function buildSky() {
   sky.userData.dynamic = true;
   sky.renderOrder = -1;
   scene.add(sky);
+  return sky;
 }
 
 /* ---------- Plants ---------- */
@@ -576,6 +579,8 @@ function plant(x, z, { height = 1.5, spread = 0.45, potH = 0.48, potR = 0.24, le
 /* ---------- Furniture ---------- */
 /** Sofa or armchair built facing +z, origin on the floor at the centre. */
 function sofa(width, { seats = 3, accent = false } = {}) {
+  if (width >= 2 && FURN.sofa3) return placeFurn('sofa3', 0, 0, 0);
+  if (width < 1.2 && FURN.lounge_chair) return placeFurn('lounge_chair', 0, 0, 0);
   const g = new THREE.Group();
   const depth = 0.9, armW = 0.16;
   const inner = width - armW * 2;
@@ -602,6 +607,7 @@ function sofa(width, { seats = 3, accent = false } = {}) {
 }
 
 function officeChair() {
+  if (FURN.office_chair) return placeFurn('office_chair', 0, 0, 0);
   const g = new THREE.Group();
   rbox(0.5, 0.08, 0.48, 0.03, M.leather, 0, 0.48, 0, g);
   const back = rbox(0.46, 0.56, 0.06, 0.03, M.leather, 0, 0.86, -0.25, g);
@@ -644,12 +650,16 @@ function buildExterior() {
   // Ground: lawn, forecourt paving, street
   const lawn = panel(260, 260, M.grass, 0, -0.01, 40, 'up');
   lawn.material.map = repeatOf(M.grass.map, 90, 90);
+  LAWN.push(lawn.material);
   const plaza = panel(30, 12, M.paving, 0, 0.002, 6, 'up');
   plaza.material = M.paving.clone(); plaza.material.map = repeatOf(M.paving.map, 30 / 2.4, 12 / 2.4);
+  PAVED.push(plaza.material);
   const path = panel(4.4, 20, M.paving, 0, 0.003, 22, 'up');
   path.material = M.paving.clone(); path.material.map = repeatOf(M.paving.map, 4.4 / 2.4, 20 / 2.4);
+  PAVED.push(path.material);
   const road = panel(260, 9, M.asphalt, 0, 0.001, 36.5, 'up');
   road.material = M.asphalt.clone(); road.material.map = repeatOf(M.asphalt.map, 60, 2);
+  ASPHALT.push(road.material);
   // kerbs and road markings
   box(260, 0.12, 0.25, M.concrete, 0, 0.06, 31.9);
   box(260, 0.12, 0.25, M.concrete, 0, 0.06, 41.1);
@@ -930,11 +940,14 @@ function buildLounge() {
   }
   // round coffee table: oak top, slim steel legs
   const tx = 5.85;
-  cyl(0.52, 0.52, 0.035, M.wood, tx, 0.42, cz, scene, 48);
-  for (let i = 0; i < 3; i++) {
-    const a = (i / 3) * Math.PI * 2;
-    const leg = cyl(0.012, 0.012, 0.42, M.metalDark, tx + Math.cos(a) * 0.36, 0.2, cz + Math.sin(a) * 0.36, scene, 8);
-    leg.rotation.set(Math.sin(a) * 0.12, 0, -Math.cos(a) * 0.12);
+  if (FURN.coffee_table) placeFurn('coffee_table', tx, 0, cz);
+  else {
+    cyl(0.52, 0.52, 0.035, M.wood, tx, 0.42, cz, scene, 48);
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2;
+      const leg = cyl(0.012, 0.012, 0.42, M.metalDark, tx + Math.cos(a) * 0.36, 0.2, cz + Math.sin(a) * 0.36, scene, 8);
+      leg.rotation.set(Math.sin(a) * 0.12, 0, -Math.cos(a) * 0.12);
+    }
   }
   // magazines + mug + a small vase
   [0.0, 0.1].forEach((r, i) => box(0.24, 0.008, 0.32, M.books[i + 1], tx - 0.15, 0.442 + i * 0.009, cz + 0.12).rotation.y = r + 0.3);
@@ -960,6 +973,12 @@ function buildLounge() {
 
 /** Oak bookshelf against a side wall at wallX; dir = +1 faces +x, -1 faces -x. */
 function bookshelf(wallX, bz, dir, { bw = 2.6, bh = 2.1, bd = 0.36, shelves = 5 } = {}) {
+  if (FURN.bookshelf) {
+    // real bookshelves side by side along the wall, shelves facing the room
+    const size = FURN.bookshelfSize, n = Math.max(1, Math.round(bw / size.z));
+    for (let i = 0; i < n; i++) placeFurn('bookshelf', wallX + dir * (size.x / 2 + 0.03), 0, bz + (i - (n - 1) / 2) * size.z, dir > 0 ? 0 : Math.PI);
+    return;
+  }
   const bx = wallX + dir * (bd / 2 + 0.02);
   box(bd, 0.04, bw, M.wood, bx, bh, bz);
   box(bd, 0.08, bw, M.wood, bx, 0.04, bz);
@@ -1064,6 +1083,7 @@ function buildBackWall() {
   plant(-3.15, -13.45, { height: 1.85, spread: 0.5, potR: 0.25, potH: 0.6, leaves: 95, light: true });
   plant(3.15, -13.45, { height: 1.85, spread: 0.5, potR: 0.25, potH: 0.6, leaves: 95, light: true });
   for (const x of [-5.4, 5.4]) {
+    if (FURN.bench) { placeFurn('bench', x, 0, -13.6); continue; }
     box(1.6, 0.05, 0.42, M.wood, x, 0.45, -13.6);
     for (const dx of [-0.7, 0.7]) box(0.04, 0.43, 0.38, M.metalDark, x + dx, 0.215, -13.6);
   }
@@ -1537,10 +1557,16 @@ function buildRooms() {
   cyl(0.07, 0.08, 0.02, M.metalDark, bx + 0.65, 0.785, bz - 0.25, scene, 20);
   const arm = cyl(0.008, 0.008, 0.42, M.metalDark, bx + 0.62, 0.98, bz - 0.25, scene, 8); arm.rotation.z = 0.25;
   cyl(0.03, 0.08, 0.1, M.metalDark, bx + 0.5, 1.15, bz - 0.25, scene, 20);
-  const desk = airliner(); desk.scale.setScalar(0.28); desk.position.set(bx - 0.65, 0.92, bz - 0.2); desk.rotation.set(0, 0.6, 0.08);
-  scene.add(desk);
-  cyl(0.003, 0.003, 0.14, M.metal, bx - 0.65, 0.84, bz - 0.2, scene, 6);
-  cyl(0.04, 0.04, 0.012, M.paintNavy, bx - 0.65, 0.78, bz - 0.2, scene, 20);
+  // a turbofan display on a plinth: the glTF engine arrives later (loadDeskEngine), the plaque says what it does
+  DESK_ENGINE.pos.set(bx - 0.45, 0.775 + 0.045, bz - 0.12);
+  rbox(0.56, 0.045, 0.26, 0.012, M.frameBlack, DESK_ENGINE.pos.x, 0.775 + 0.0225, DESK_ENGINE.pos.z);
+  const plaque = canvasTex(512, 96, (g, w, h) => {
+    g.fillStyle = '#c9a45c'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#1d1f24'; g.font = FONT(700, 34); g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.letterSpacing = '4px';
+    g.fillText('CFM56-5B · TAKE IT APART', w / 2 + 2, h / 2 + 2);
+  });
+  panel(0.3, 0.056, new THREE.MeshStandardMaterial({ map: plaque, roughness: 0.4, metalness: 0.6 }), DESK_ENGINE.pos.x, 0.775 + 0.0225, DESK_ENGINE.pos.z + 0.1305, '+z');
   // mentor's chair behind the desk, student's armchair in front
   const mc = officeChair(); mc.position.set(bx, 0, bz - 0.85);
   const guest = sofa(0.82, { seats: 1 }); guest.position.set(bx + 0.1, 0, bz + 1.0); guest.rotation.y = Math.PI + 0.15;
@@ -1564,6 +1590,7 @@ function buildRooms() {
 
 /** Classroom chair facing -z (toward the front of the room). */
 function studentChair(x, z) {
+  if (FURN.student_chair) return placeFurn('student_chair', x, 0, z, Math.PI + (rand() - 0.5) * 0.25);
   const g = new THREE.Group();
   g.position.set(x, 0, z);
   g.rotation.y = Math.PI + (rand() - 0.5) * 0.25;
@@ -1601,17 +1628,16 @@ function bakeGroup(g) {
   const buckets = new Map(), done = [];
   g.traverse((o) => {
     if (!o.isMesh || o.userData.keep || Array.isArray(o.material)) return;
-    const geo = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+    const src = o.geometry.clone();
+    for (const k of Object.keys(src.attributes)) if (!['position', 'normal', 'uv'].includes(k)) src.deleteAttribute(k);
+    floatGeometry(src);
+    const geo = src.index ? src.toNonIndexed() : src;
     for (const k of Object.keys(geo.attributes)) {
       if (!['position', 'normal', 'uv'].includes(k)) { geo.deleteAttribute(k); continue; }
       // glTF models arrive quantized (normalized int16 / int8, often interleaved): unpack to floats
       // first, or transforming them would clamp positions to the [-1, 1] range
       const a = geo.attributes[k];
-      if (a.isInterleavedBufferAttribute || !(a.array instanceof Float32Array) || a.normalized) {
-        const n = a.itemSize, f = new Float32Array(a.count * n), get = ['getX', 'getY', 'getZ', 'getW'];
-        for (let i = 0; i < a.count; i++) for (let j = 0; j < n; j++) f[i * n + j] = a[get[j]](i);
-        geo.setAttribute(k, new THREE.BufferAttribute(f, n));
-      }
+      if (a.isInterleavedBufferAttribute || !(a.array instanceof Float32Array) || a.normalized) geo.setAttribute(k, floatAttr(a));
     }
     geo.clearGroups();
     geo.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));
@@ -1855,6 +1881,20 @@ const MODEL_SPECS = {
   tower: { url: 'models/delhi_atc_tower.glb', yaw: 0, height: 72 },
 };
 const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+/** a float copy of any attribute, read straight off its typed array (getX per element is far too slow at 100k+) */
+function floatAttr(a) {
+  const n = a.itemSize, cnt = a.count, inter = a.isInterleavedBufferAttribute;
+  const src = inter ? a.data.array : a.array, stride = inter ? a.data.stride : n, off = inter ? a.offset : 0;
+  let scale = 1;
+  if (a.normalized) scale = src instanceof Int8Array ? 1 / 127 : src instanceof Uint8Array ? 1 / 255 : src instanceof Int16Array ? 1 / 32767 : src instanceof Uint16Array ? 1 / 65535 : 1;
+  const f = new Float32Array(cnt * n);
+  for (let i = 0, o = 0; i < cnt; i++) {
+    const b = i * stride + off;
+    for (let j = 0; j < n; j++, o++) f[o] = Math.max(-1e30, src[b + j] * scale);
+  }
+  if (a.normalized && (src instanceof Int8Array || src instanceof Int16Array)) for (let i = 0; i < f.length; i++) if (f[i] < -1) f[i] = -1;
+  return new THREE.BufferAttribute(f, n);
+}
 /** Load, turn the nose toward +x, scale to real size, sit it on the ground, matte the paint. */
 function loadAirModel(key) {
   const sp = MODEL_SPECS[key];
@@ -1885,6 +1925,184 @@ function loadAirModel(key) {
 }
 // each model swaps in on its own as soon as it arrives (the A320 is small, the Cessna is the heaviest)
 const airModels = Object.fromEntries(Object.keys(MODEL_SPECS).map((k) => [k, loadAirModel(k).catch((e) => { console.warn('model', k, e); return null; })]));
+
+/* ---------- Realism: photographed sky and light, PBR surfaces, real furniture ---------- */
+// Sky and image-based light: "Qwantani Sunset (Pure Sky)" from Poly Haven (CC0), a 1k HDR for light and reflections
+// and its tonemapped photo (4096 x 2048) as the visible sky. In the photo the sun sits 14° up at azimuth 38.5°
+// (atan2(z, x)); both are turned so it sets at SUN_AZ, where the scene's directional light comes from too.
+const SUN_AZ = THREE.MathUtils.degToRad(-160);
+const SKY_ROT = THREE.MathUtils.degToRad(38.5) - SUN_AZ;
+const SUN_EL = THREE.MathUtils.degToRad(14);
+const SUN_VEC = new THREE.Vector3(Math.cos(SUN_AZ) * Math.cos(SUN_EL), Math.sin(SUN_EL), Math.sin(SUN_AZ) * Math.cos(SUN_EL));
+function loadSkyAndLight(skyMesh) {
+  new RGBELoader().loadAsync('tex/qwantani_sunset_puresky_1k.hdr').then((hdr) => {
+    const env = pmrem.fromEquirectangular(hdr).texture;
+    scene.environment = env;
+    scene.environmentRotation.y = SKY_ROT;
+    hdr.dispose();
+  }).catch((e) => console.warn('hdr', e));
+  new THREE.TextureLoader().loadAsync('tex/sky_sunset.jpg').then((tex) => {
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    scene.background = tex;
+    scene.backgroundRotation.y = SKY_ROT;
+    scene.backgroundIntensity = 0.85;
+    skyMesh.visible = false;
+    // the fog takes the photo's colour just above the horizon, so distant ground melts into this sky
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 128;
+    const g = c.getContext('2d');
+    g.drawImage(tex.image, 0, 0, 256, 128);
+    const row = g.getImageData(0, 61, 256, 2).data;
+    let r = 0, gg = 0, b = 0;
+    for (let i = 0; i < row.length; i += 4) { r += row[i]; gg += row[i + 1]; b += row[i + 2]; }
+    const n = row.length / 4;
+    HORIZON.setRGB(r / n / 255, gg / n / 255, b / n / 255, THREE.SRGBColorSpace).multiplyScalar(0.85);
+    scene.fog.color.copy(HORIZON);
+  }).catch((e) => console.warn('sky', e));
+}
+
+// PBR texture sets from Poly Haven (CC0): diffuse 1k, roughness and GL normal 512, in tex/.
+const PBR_CACHE = new Map();
+const texLoader = new THREE.TextureLoader();
+function pbrSet(name, maps = ['diff', 'rough', 'nor']) {
+  const key = name + maps.join();
+  if (!PBR_CACHE.has(key)) {
+    PBR_CACHE.set(key, Promise.all(maps.map((k) => texLoader.loadAsync(`tex/${name}_${k}.jpg`).then((t) => {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.anisotropy = MAX_ANISO;
+      if (k === 'diff') t.colorSpace = THREE.SRGBColorSpace;
+      return [k, t];
+    }))).then(Object.fromEntries));
+  }
+  return PBR_CACHE.get(key);
+}
+/** dress a material in a texture set once its images are in; repeat [x, y] (or the repeat its old map had, times k) */
+function dress(mat, name, { repeat, keepRepeatOf, k = 1, color, diff = true, normal = 1, rough } = {}) {
+  const rep = repeat || (keepRepeatOf ? [keepRepeatOf.repeat.x * k, keepRepeatOf.repeat.y * k] : [1, 1]);
+  pbrSet(name, diff ? ['diff', 'rough', 'nor'] : ['rough', 'nor']).then((set) => {
+    const use = (t) => { const c = t.clone(); c.repeat.set(rep[0], rep[1]); return c; };
+    if (diff) mat.map = use(set.diff);
+    mat.roughnessMap = use(set.rough);
+    mat.normalMap = use(set.nor);
+    mat.normalScale.set(normal, normal);
+    mat.roughness = rough ?? 1;
+    if (color !== undefined) mat.color.set(color);
+    mat.needsUpdate = true;
+  }).catch((e) => console.warn('texture set', name, e));
+}
+
+/** Lay the Poly Haven surfaces over the scene's materials (walls, floors, wood, fabric, ground). */
+function dressScene() {
+  // inside: marble-tile floor, plaster walls, oak veneer, woven upholstery, leather
+  // the lobby keeps its large-format porcelain tiles (the marble set is a small mosaic): a light polish instead
+  M.floor.roughness = 0.45;
+  M.floor.envMapIntensity = 0.8;
+  for (const w of [M.wall, M.wallWarm]) dress(w, 'painted_plaster_wall', { repeat: [3, 1.2], diff: false, normal: 0.5, rough: 1 });
+  dress(M.wood, 'oak_veneer_01', { repeat: [1, 1], color: 0xffffff, rough: 0.9 });
+  dress(M.woodDark, 'oak_veneer_01', { repeat: [1, 1], color: 0x8a7a6e, rough: 0.9 });
+  for (const f of [M.fabric, M.fabricLight, M.fabricAccent]) dress(f, 'fabric_pattern_07', { repeat: [3, 3], diff: false, normal: 0.8, rough: 1 });
+  dress(M.leather, 'brown_leather', { repeat: [2, 2], diff: false, normal: 0.6, rough: 1 });
+  // outside: paving, lawn, asphalt, concrete
+  for (const m of PAVED) dress(m, 'rectangular_paving', { keepRepeatOf: m.map, k: 1.2, color: 0xffffff, rough: 1 });
+  for (const m of LAWN) dress(m, 'leafy_grass', { keepRepeatOf: m.map, k: 1.3, color: 0xb9c7a6, rough: 1 });
+  for (const m of ASPHALT) dress(m, 'asphalt_02', { keepRepeatOf: m.map, k: 1.5, rough: 1 });
+  for (const m of CONCRETE_GROUND) dress(m, 'concrete_floor_worn_001', { keepRepeatOf: m.map, k: 5, color: 0xd6d3cc, rough: 1 });
+  dress(M.concrete, 'brushed_concrete', { repeat: [1, 1], color: 0xcfcac2, rough: 1 });
+}
+// filled while the scene is built: materials that later take a texture set
+const PAVED = [], LAWN = [], ASPHALT = [], CONCRETE_GROUND = [];
+
+// Real furniture: pieces cut from "Residential Furniture" by ATD-London (CC BY 4.0) into models/furniture.glb, and
+// "Bookshelf [CC0]" by Crew Froebel (CC BY 4.0) as models/bookshelf.glb. Loaded before the scene is built.
+const FURN = {};
+/** unpack quantized attributes to plain floats (meshopt files arrive int16 / int8, often interleaved) */
+function floatGeometry(geo) {
+  for (const k of Object.keys(geo.attributes)) {
+    const a = geo.attributes[k];
+    if (!a.isInterleavedBufferAttribute && a.array instanceof Float32Array && !a.normalized) continue;
+    geo.setAttribute(k, floatAttr(a));
+  }
+  return geo;
+}
+/** which way a seat faces: its backrest is the tallest side; turn it so the back is at -z and it faces +z */
+function faceForward(root) {
+  const pts = [];
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const p = o.geometry.attributes.position;
+    for (let i = 0; i < p.count; i += 3) pts.push(new THREE.Vector3().fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld));
+  });
+  const score = (sel) => { let s = 0, n = 0; for (const v of pts) if (sel(v)) { s += v.y; n++; } return n ? s / n : 0; };
+  const sides = [['-z', 0, score((v) => v.z < 0)], ['+z', Math.PI, score((v) => v.z > 0)], ['+x', Math.PI / 2, score((v) => v.x > 0)], ['-x', -Math.PI / 2, score((v) => v.x < 0)]];
+  sides.sort((a, b) => b[2] - a[2]);
+  return sides[0][1]; // yaw that puts the back at -z
+}
+async function loadFurniture() {
+  const timeout = (p) => Promise.race([p, new Promise((r) => setTimeout(() => r(null), 6000))]).catch(() => null);
+  const [f, b] = await Promise.all([timeout(gltfLoader.loadAsync('models/furniture.glb')), timeout(gltfLoader.loadAsync('models/bookshelf.glb'))]);
+  const glassy = new THREE.MeshPhysicalMaterial({ color: 0xcfe3ea, roughness: 0.08, metalness: 0, transparent: true, opacity: 0.35, envMapIntensity: 1.2 });
+  // the catalogue's materials are plain colours; each piece says what they really are
+  const DRESS = {
+    sofa3: { fabric: M.fabric, other: M.metalDark, seat: true },
+    lounge_chair: { fabric: M.fabricLight, other: M.metalDark, seat: true },
+    office_chair: { fabric: M.leather, other: M.leather, seat: true },
+    student_chair: { fabric: M.paintNavy, other: M.paintNavy, seat: true },
+    bench: { fabric: M.fabric, other: M.metalDark },
+    coffee_table: { fabric: M.wood, other: M.metalDark, glass: glassy },
+    coffee_table_rect: { fabric: M.wood, other: M.wood },
+    side_table: { fabric: M.wood, other: M.wood },
+    desk: { fabric: M.wood, other: M.wood },
+  };
+  if (f) {
+    for (const [name, d] of Object.entries(DRESS)) {
+      let node = null;
+      for (const s of f.scenes) node = node || s.getObjectByName(name);
+      if (!node) continue;
+      const t = new THREE.Group();
+      const c = node.clone();
+      c.position.set(0, 0, 0);
+      c.rotation.set(0, 0, 0);
+      c.scale.set(1, 1, 1);
+      t.add(c);
+      t.updateMatrixWorld(true);
+      c.traverse((o) => {
+        if (!o.isMesh) return;
+        o.geometry = floatGeometry(o.geometry.clone());
+        const nm = o.material.name || '';
+        o.material = /Canvas|Linen/.test(nm) ? d.fabric : /R0_G192/.test(nm) ? d.glass || d.other : /R1[5-7]\d_|R120/.test(nm) ? d.other : d.fabric === M.fabric || d.fabric === M.fabricLight ? d.other : d.fabric;
+        o.castShadow = o.receiveShadow = true;
+      });
+      if (d.seat) c.rotation.y = faceForward(t);
+      FURN[name] = t;
+    }
+  }
+  if (b) {
+    const root = b.scene;
+    root.traverse((o) => { if (o.isMesh) { o.geometry = floatGeometry(o.geometry.clone()); o.castShadow = o.receiveShadow = true; } });
+    const t = new THREE.Group();
+    t.add(root);
+    t.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(t), c = box.getCenter(new THREE.Vector3());
+    root.position.set(-c.x, -box.min.y, -c.z);
+    // the shelf stands 1.15 m tall; at 1.75x it fills a 2 m wall bay. Its shelves face +x in the file.
+    const w = new THREE.Group();
+    w.add(t);
+    w.scale.setScalar(1.75);
+    FURN.bookshelf = w;
+    FURN.bookshelfSize = box.getSize(new THREE.Vector3()).multiplyScalar(1.75);
+  }
+}
+/** a copy of a furniture model, placed; parent defaults to the scene (static, so mergeStatic bakes it) */
+function placeFurn(name, x, y, z, yaw = 0, parent = scene) {
+  const t = FURN[name];
+  if (!t) return null;
+  const c = t.clone();
+  c.position.set(x, y, z);
+  c.rotation.y = yaw;
+  parent.add(c);
+  return c;
+}
 
 /** Replace rigged meshes with plain ones frozen in their rest pose (the Cessna arrives rigged). */
 function unskin(root) {
@@ -1991,11 +2209,13 @@ function buildAirside() {
     for (let i = 0; i <= 4; i++) { g.fillRect(i * 128 - 1, 0, 2, h); g.fillRect(0, i * 128 - 1, w, 2); }
   });
   const apronMat = new THREE.MeshStandardMaterial({ map: repeatOf(concreteTex, 520 / 24, 92 / 24), roughness: 0.9 });
+  CONCRETE_GROUND.push(apronMat);
   const tarmac = new THREE.MeshStandardMaterial({ map: repeatOf(T.asphalt, 1, 1), color: 0x9a9a9a, roughness: 0.9 });
-  const tarmacAt = (w, d) => { const m = tarmac.clone(); m.map = repeatOf(T.asphalt, w / 12, d / 12); return m; };
+  const tarmacAt = (w, d) => { const m = tarmac.clone(); m.map = repeatOf(T.asphalt, w / 12, d / 12); ASPHALT.push(m); return m; };
   const yellow = new THREE.MeshStandardMaterial({ color: 0xd9b23a, roughness: 0.8 });
   const white = new THREE.MeshStandardMaterial({ color: 0xe9e9e4, roughness: 0.8 });
   const grass = new THREE.MeshStandardMaterial({ map: repeatOf(T.grass, 900, 900), roughness: 1 });
+  LAWN.push(grass);
 
   // ground layers: grass everywhere, apron, service road, taxiway, connectors, runway
   panel(6000, 6000, grass, 0, -0.06, -900, 'up', air);
@@ -2396,19 +2616,25 @@ function progressToU(p) {
 /* ---------- Boot ---------- */
 let T, M, hemi;
 async function init() {
+  window.__boot = Math.round(performance.now());
   try { await Promise.all([FONT(500, 64), FONT(600, 30), FONT(500, 64, DISPLAY), FONT(700, 27)].map((f) => document.fonts.load(f))); } catch (e) { /* fall back to system fonts */ }
   let logoImg;
   try { logoImg = await loadImage('brand/logo-white.svg'); } catch (e) { logoImg = document.createElement('canvas'); }
   T = makeTextures(logoImg);
   M = makeMaterials(T);
 
-  buildSky();
+  const t0 = performance.now();
+  window.__marks = [['start', Math.round(t0)]];
+  const mark = (k) => window.__marks.push([k, Math.round(performance.now() - t0)]);
+  await loadFurniture();
+  mark('furniture');
+  const skyMesh = buildSky();
   // Sunset: lavender sky fill, low amber sun raking across the facade from the west
   hemi = new THREE.HemisphereLight(0x8a88b8, 0x3a2c26, 0.6);
   scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffb37a, 1.7);
-  sun.position.set(-42, 12, 6);
-  sun.target.position.set(0, 0, 8);
+  sun.target.position.set(0, 0, 4);
+  sun.position.copy(SUN_VEC).multiplyScalar(48).add(sun.target.position); // where the photographed sun sets
   scene.add(sun.target);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -2418,10 +2644,14 @@ async function init() {
   scene.add(sun);
 
   buildExterior();
+  mark('exterior');
   buildLobby();
+  mark('lobby');
   buildAirside();
+  mark('airside');
   updateAirside(performance.now()); // place every vehicle on its route before the first frame
   for (const [k, pr] of Object.entries(airModels)) pr.then((m) => m && upgradeAirside({ [k]: m }));
+  loadDeskEngine();
   uDoor = computeDoorU();
 
   // Glass and logo planes should not throw shadows into the lobby
@@ -2429,11 +2659,15 @@ async function init() {
     if (o.isMesh && (o.material === M.glass || o.material?.transparent)) o.castShadow = false;
   });
 
+  mark('built');
   mergeStatic();
+  mark('merged');
+  loadSkyAndLight(skyMesh);
+  dressScene();
   renderer.shadowMap.autoUpdate = false; // nothing that casts shadows moves, so bake them once
   renderer.shadowMap.needsUpdate = true;
 
-  window.__cc = { renderer, scene, camera, AIRSIDE, look: (x, y, z) => roomCam.look.set(x, y, z), setP: (v) => { targetP = p = v; } }; // debug handle
+  window.__cc = { renderer, scene, camera, AIRSIDE, look: (x, y, z) => roomCam.look.set(x, y, z), view: (p, l) => { mode = "moving"; roomCam.pos.set(...p); roomCam.look.set(...l); }, setP: (v) => { targetP = p = v; } }; // debug handle
   setupScroll();
   onResize();
   // ?p=0.5 jumps the walk to that point (handy for screenshots)
@@ -2450,8 +2684,18 @@ async function init() {
       roomCam.pos.set(5.6, 1.9, -7.6); roomCam.look.set(8, 1.95, -7.6);
     }
   }
+  // compile every shader in parallel (KHR_parallel_shader_compile) instead of stalling on the first frame; the
+  // airside and the rooms are compiled too, from a camera that sees everything, so walking in never hitches
+  const all = camera.clone();
+  all.position.set(0, 60, 40);
+  all.lookAt(0, 0, -60);
+  all.far = 4000;
+  all.updateProjectionMatrix();
+  AIRSIDE.root.visible = true;
+  await renderer.compileAsync(scene, all).catch(() => {});
+  AIRSIDE.root.visible = false;
+  mark('shaders');
   frame();
-  renderer.compile(scene, camera);
   requestAnimationFrame(() => document.documentElement.classList.add('is-ready'));
 }
 
@@ -2463,13 +2707,16 @@ function mergeStatic() {
   scene.traverse((o) => {
     if (!o.isMesh || Array.isArray(o.material)) return;
     for (let a = o; a; a = a.parent) if (a.userData.dynamic) return;
-    const key = `${o.material.uuid}|${o.castShadow}|${o.receiveShadow}|${o.renderOrder}`;
-    let b = buckets.get(key);
-    if (!b) buckets.set(key, (b = { mat: o.material, cast: o.castShadow, receive: o.receiveShadow, order: o.renderOrder, geos: [] }));
-    const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
-    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+    const src = o.geometry.clone();
+    for (const k of Object.keys(src.attributes)) if (!['position', 'normal', 'uv'].includes(k)) src.deleteAttribute(k);
+    floatGeometry(src);
+    const g = src.index ? src.toNonIndexed() : src;
     g.clearGroups();
     g.applyMatrix4(o.matrixWorld);
+    // models and code-built parts can share a material yet differ in attributes (no uv): merge them separately
+    const key = `${o.material.uuid}|${o.castShadow}|${o.receiveShadow}|${o.renderOrder}|${Object.keys(g.attributes).sort().join()}`;
+    let b = buckets.get(key);
+    if (!b) buckets.set(key, (b = { mat: o.material, cast: o.castShadow, receive: o.receiveShadow, order: o.renderOrder, geos: [] }));
     b.geos.push(g);
     merged.push(o);
   });
@@ -2524,7 +2771,7 @@ const COURSES = {
     via: [[-1.2, 1.62, -12.2], [-1.65, 1.62, -13.7], [-1.9, 1.62, -14.7]], pos: [-2.75, 1.62, -15.5], look: [-4.2, 1.45, -22.2],
   },
   B: {
-    eyebrow: 'Room B', title: '1-on-1 Mentorship', side: 'left',
+    eyebrow: 'Room B', title: '1-on-1 Mentorship', side: 'left', engine: true,
     lede: 'Book time with a mentor for career guidance, subject doubts or a full mentorship programme, without long message threads.',
     points: ['General career and flight-training guidance', 'Subject-specific doubt-clearing sessions', 'Self-study mentorship with recorded classes', 'Pick an open slot, then confirm your booking'],
     via: [[1.2, 1.62, -12.2], [1.65, 1.62, -13.7], [1.9, 1.62, -14.7]], pos: [2.7, 1.62, -15.4], look: [4.7, 1.2, -19.9],
@@ -2542,6 +2789,57 @@ const COURSES = {
 };
 let activeRoom = null;
 let mode = 'walk'; // 'walk' | 'moving' | 'room' | 'screen'
+
+/* ---------- The turbofan on the mentor's desk, and the teardown simulator it opens ---------- */
+// The desk model is "Jet Engine" by Pilot (sketchfab.com/playerhack), CC BY 4.0, with its own idle animation turning
+// the fan. engine/cfm56.html is the CFM56-5B4 simulator built with the teardown kit from coaching-centre/sims/.
+const DESK_ENGINE = { pos: new THREE.Vector3(), mixer: null, hit: null };
+function loadDeskEngine() {
+  gltfLoader.loadAsync('models/jet_engine.glb').then((gltf) => {
+    const m = gltf.scene, s = 0.42 / 13.97; // the source is 13.97 units long, centred at (-0.8, 4.0, -0.59)
+    m.scale.setScalar(s);
+    m.position.set(0.8 * s, -0.25 * s, 0.59 * s);
+    m.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.frustumCulled = false; } });
+    const g = new THREE.Group();
+    g.add(m);
+    g.position.copy(DESK_ENGINE.pos);
+    g.rotation.y = 0.55;
+    g.userData.dynamic = true;
+    scene.add(g);
+    DESK_ENGINE.mixer = new THREE.AnimationMixer(m);
+    const idle = gltf.animations.find((a) => a.name === 'idle');
+    if (idle) DESK_ENGINE.mixer.clipAction(idle).play();
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.26, 0.24), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+    hit.position.set(0, 0.12, 0);
+    g.add(hit);
+    DESK_ENGINE.hit = hit;
+  }).catch((e) => console.warn('desk engine', e));
+}
+const engineOv = document.getElementById('engineOv');
+const engineFrame = engineOv.querySelector('iframe');
+let engineOpen = false;
+function openEngine() {
+  if (engineOpen) return;
+  engineOpen = true;
+  if (!engineFrame.src) engineFrame.src = 'engine/cfm56.html';
+  engineOv.hidden = false;
+  requestAnimationFrame(() => engineOv.classList.add('is-open'));
+  document.getElementById('engineClose').focus({ preventScroll: true });
+}
+function closeEngine() {
+  if (!engineOpen) return;
+  engineOpen = false;
+  engineOv.classList.remove('is-open');
+  setTimeout(() => { if (!engineOpen) engineOv.hidden = true; }, 350);
+}
+document.getElementById('engineClose').addEventListener('click', closeEngine);
+document.getElementById('engineOpen').addEventListener('click', openEngine);
+function engineAt(x, y) {
+  if (mode !== 'room' || activeRoom !== 'B' || !DESK_ENGINE.hit) return false;
+  ndc.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  return ray.intersectObject(DESK_ENGINE.hit, false).length > 0;
+}
 let roomTl = null, hovered = null;
 const roomCam = { pos: new THREE.Vector3(), look: new THREE.Vector3() };
 const lastWalk = { pos: new THREE.Vector3(0, 1.6, -9.3), look: new THREE.Vector3(0, 1.4, -14) };
@@ -2642,6 +2940,7 @@ function showCard(id) {
   card.querySelector('[data-f="lede"]').textContent = c.lede;
   card.querySelector('[data-f="points"]').replaceChildren(...c.points.map((t) => Object.assign(document.createElement('li'), { textContent: t })));
   card.dataset.side = c.side;
+  document.getElementById('engineOpen').hidden = !c.engine;
   setCardCollapsed(false);
   card.hidden = false;
   requestAnimationFrame(() => card.classList.add('is-open'));
@@ -2659,7 +2958,7 @@ function setCardCollapsed(on) {
 }
 document.getElementById('roomToggle').addEventListener('click', () => setCardCollapsed(!card.classList.contains('is-collapsed')));
 document.getElementById('roomBack').addEventListener('click', leaveRoom);
-addEventListener('keydown', (e) => { if (e.key === 'Escape') leaveRoom(); });
+addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; if (engineOpen) closeEngine(); else leaveRoom(); });
 document.querySelectorAll('[data-room]').forEach((b) => b.addEventListener('click', () => enterRoom(b.dataset.room)));
 
 // Pointer picking on the door leaves, only once the walk has arrived in front of them
@@ -2687,12 +2986,13 @@ function screenAt(x, y) {
 canvas.addEventListener('pointermove', (e) => {
   const door = doorAt(e.clientX, e.clientY);
   setHover(door);
-  if (!door) canvas.style.cursor = screenAt(e.clientX, e.clientY) ? 'pointer' : '';
+  if (!door) canvas.style.cursor = screenAt(e.clientX, e.clientY) || engineAt(e.clientX, e.clientY) ? 'pointer' : '';
 });
 canvas.addEventListener('click', (e) => {
   const id = doorAt(e.clientX, e.clientY);
   if (id) return enterRoom(id);
   if (screenAt(e.clientX, e.clientY)) viewScreen();
+  else if (engineAt(e.clientX, e.clientY)) openEngine();
 });
 
 /* ---------- Frame ---------- */
@@ -2703,6 +3003,8 @@ let frames = 0, slowTime = 0, lastT = performance.now();
 function frame() {
   // Drop resolution once if this device can't keep up
   const now = performance.now(), dt = now - lastT; lastT = now;
+  if (engineOpen && engineOv.classList.contains('is-open')) return; // the simulator has the GPU while it is open
+  if (DESK_ENGINE.mixer && camera.position.z < -14 && camera.position.x > 0) DESK_ENGINE.mixer.update(Math.min(dt, 100) / 1000);
   if (document.visibilityState === 'visible' && ++frames > 30 && frames < 240) {
     slowTime = slowTime * 0.9 + dt * 0.1;
     if (frames === 239 && slowTime > 26 && pixelRatio > 0.9) { pixelRatio = Math.max(0.85, pixelRatio * 0.7); renderer.setPixelRatio(pixelRatio); renderer.setSize(innerWidth, innerHeight, false); }
@@ -2726,7 +3028,10 @@ function frame() {
   const out = range(-camera.position.z, 21, 26);
   scene.fog.near = 34 + out * 170;
   scene.fog.far = 150 + out * 1500;
-  if (hemi) hemi.intensity = 0.6 + out * 0.35;
+  // outdoors (the forecourt, the apron) the sky does most of the lighting at sunset; indoors it only tints reflections
+  const outdoors = Math.max(out, range(camera.position.z, -0.5, 3.5));
+  scene.environmentIntensity = 0.3 + 0.75 * outdoors;
+  if (hemi) hemi.intensity = 0.55 + 0.45 * outdoors;
   const near = camera.position.z < -25.5 ? 0.3 : 0.05;
   if (camera.near !== near) { camera.near = near; camera.updateProjectionMatrix(); }
   if (AIRSIDE.root) updateAirside(now);
