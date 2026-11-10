@@ -2206,7 +2206,10 @@ function updateAirside(now) {
   // back sliding doors open as the camera reaches them, whichever way it is going
   const open = range(-camera.position.z, 20, 22);
   AIRSIDE.backLeaves.forEach((g) => { g.position.x = g.userData.closedX + Math.sign(g.userData.closedX) * 0.75 * open; });
-  if (!on) return;
+  // Keep every vehicle on its route even while the airside is hidden: anything left at its
+  // build position would sit at the world origin, which is the front entrance. Throttled indoors.
+  if (!on && now < (AIRSIDE.idleAt || 0)) return;
+  if (!on) AIRSIDE.idleAt = now + 1000;
   const t = now / 1000;
   for (const m of AIRSIDE.movers) {
     const s = sampleRoute(AIRSIDE.route, t + m.offset, m.s);
@@ -2417,6 +2420,7 @@ async function init() {
   buildExterior();
   buildLobby();
   buildAirside();
+  updateAirside(performance.now()); // place every vehicle on its route before the first frame
   for (const [k, pr] of Object.entries(airModels)) pr.then((m) => m && upgradeAirside({ [k]: m }));
   uDoor = computeDoorU();
 
