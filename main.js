@@ -2684,19 +2684,23 @@ async function init() {
       roomCam.pos.set(5.6, 1.9, -7.6); roomCam.look.set(8, 1.95, -7.6);
     }
   }
-  // compile every shader in parallel (KHR_parallel_shader_compile) instead of stalling on the first frame; the
-  // airside and the rooms are compiled too, from a camera that sees everything, so walking in never hitches
-  const all = camera.clone();
-  all.position.set(0, 60, 40);
-  all.lookAt(0, 0, -60);
-  all.far = 4000;
-  all.updateProjectionMatrix();
-  AIRSIDE.root.visible = true;
-  await renderer.compileAsync(scene, all).catch(() => {});
-  AIRSIDE.root.visible = false;
+  // compile the opening view's shaders in parallel (KHR_parallel_shader_compile), capped so a slow GPU never holds the
+  // cover for long; once the page is up, the airside and rooms warm in the background so walking in doesn't hitch
+  await Promise.race([renderer.compileAsync(scene, camera).catch(() => {}), new Promise((r) => setTimeout(r, 6000))]);
   mark('shaders');
   frame();
-  requestAnimationFrame(() => document.documentElement.classList.add('is-ready'));
+  mark('first-frame');
+  setTimeout(() => {
+    const all = camera.clone();
+    all.position.set(0, 60, 40);
+    all.lookAt(0, 0, -60);
+    all.far = 4000;
+    all.updateProjectionMatrix();
+    AIRSIDE.root.visible = true; // programs are created synchronously; the wait for them is what runs in parallel
+    renderer.compileAsync(scene, all).catch(() => {});
+    AIRSIDE.root.visible = AIRSIDE.active;
+  }, 800);
+  requestAnimationFrame(() => { mark('raf'); document.documentElement.classList.add('is-ready'); });
 }
 
 /* ---------- Merge static meshes by material (hundreds of draw calls -> a few dozen) ---------- */
