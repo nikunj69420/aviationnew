@@ -320,3 +320,38 @@ body {
   .radar-ui__tabs button { flex: 1; padding: 10px 6px; }
   .radar-ui__tabs button span { display: none; }
 }
+
+/* ---------- Course card: tuck away to see the room ---------- */
+.room-card__toggle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border: 1px solid rgba(243, 245, 250, 0.22);
+  background: transparent;
+  color: var(--ink-soft);
+  font: 600 11px/1 'JetBrains Mono', ui-monospace, monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.25s, color 0.25s;
+}
+.room-card__toggle:hover, .room-card__toggle:focus-visible { border-color: var(--cyan); color: var(--ink); outline: none; }
+.room-card__chev { width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; rotate: 45deg; translate: 0 -2px; transition: rotate 0.3s, translate 0.3s; }
+.room-card.is-collapsed .room-card__chev { rotate: -135deg; translate: 0 2px; }
+.room-card.is-collapsed { padding: 14px 16px; width: auto; max-width: calc(100vw - 2 * var(--gutter)); display: flex; align-items: center; gap: 14px; }
+.room-card.is-collapsed .eyebrow,
+.room-card.is-collapsed .room-card__lede,
+.room-card.is-collapsed .room-card__list,
+.room-card.is-collapsed .room-card__actions .btn:not(#roomBack) { display: none; }
+.room-card.is-collapsed h2 { font-size: 20px; white-space: nowrap; }
+.room-card.is-collapsed .room-card__actions { margin-top: 0; order: 3; }
+.room-card.is-collapsed .room-card__actions .btn { padding: 8px 12px; font-size: 13px; }
+.room-card.is-collapsed .room-card__toggle { position: static; order: 2; }
+.room-card:not(.is-collapsed) h2 { padding-right: 70px; }
+@media (max-width: 640px) {
+  .room-card.is-collapsed h2 { font-size: 17px; }
+}

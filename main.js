@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
 /*
   AviationSpot360 Ground School: a scroll-driven walk from the campus forecourt,
@@ -1577,7 +1580,7 @@ function studentChair(x, z) {
 /* ---------- Door C, the corridor and the airside ---------- */
 // The airside opens behind the building (z < -23), facing west into the sunset. The runway runs
 // east-west 300 m out; four airliners fly one loop (land, taxi, line up, take off) at staggered times.
-const AIRSIDE = { root: null, movers: [], blinkers: [], vehicles: [], backLeaves: [], rabbit: null, route: null, active: false };
+const AIRSIDE = { root: null, movers: [], blinkers: [], vehicles: [], backLeaves: [], rabbit: null, route: null, active: false, placeholders: { trainers: [], jets: [], tower: null } };
 const RWY_Z = -322, TWY_Z = -135, RWY_THR = 760, RWY_END = -1700;
 let GLOW = null;
 
@@ -1599,15 +1602,26 @@ function bakeGroup(g) {
   g.traverse((o) => {
     if (!o.isMesh || o.userData.keep || Array.isArray(o.material)) return;
     const geo = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
-    for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
+    for (const k of Object.keys(geo.attributes)) {
+      if (!['position', 'normal', 'uv'].includes(k)) { geo.deleteAttribute(k); continue; }
+      // glTF models arrive quantized (normalized int16 / int8, often interleaved): unpack to floats
+      // first, or transforming them would clamp positions to the [-1, 1] range
+      const a = geo.attributes[k];
+      if (a.isInterleavedBufferAttribute || !(a.array instanceof Float32Array) || a.normalized) {
+        const n = a.itemSize, f = new Float32Array(a.count * n), get = ['getX', 'getY', 'getZ', 'getW'];
+        for (let i = 0; i < a.count; i++) for (let j = 0; j < n; j++) f[i * n + j] = a[get[j]](i);
+        geo.setAttribute(k, new THREE.BufferAttribute(f, n));
+      }
+    }
     geo.clearGroups();
     geo.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));
-    if (!buckets.has(o.material)) buckets.set(o.material, []);
-    buckets.get(o.material).push(geo);
+    const key = o.material.uuid + '|' + Object.keys(geo.attributes).sort().join();
+    if (!buckets.has(key)) buckets.set(key, { mat: o.material, geos: [] });
+    buckets.get(key).geos.push(geo);
     done.push(o);
   });
   done.forEach((o) => o.removeFromParent());
-  for (const [mat, geos] of buckets) g.add(new THREE.Mesh(mergeGeometries(geos), mat));
+  for (const { mat, geos } of buckets.values()) g.add(new THREE.Mesh(mergeGeometries(geos), mat));
   return g;
 }
 
@@ -1831,8 +1845,126 @@ function sampleRoute(r, t, out) {
   return out;
 }
 
+/* ---------- Real aircraft models (meshopt .glb), swapped in over the placeholders ---------- */
+// Credits: Airbus A320 by OUTPISTON (CC BY-NC-SA 4.0), Cessna 182 Skylane by VTX (CC BY-NC-SA 4.0),
+// Gulfstream G650ER by Luca Martina (CC BY 4.0), all via Sketchfab; Delhi ATC tower built for the main site.
+const MODEL_SPECS = {
+  a320: { url: 'models/a320.glb', yaw: Math.PI / 2, length: 37.6, fullColour: true },
+  c182: { url: 'models/c182.glb', yaw: -Math.PI / 2, length: 8.8 }, // cabin interior stripped, simplified
+  g650: { url: 'models/g650.glb', yaw: Math.PI / 2, length: 30.4 },
+  tower: { url: 'models/delhi_atc_tower.glb', yaw: 0, height: 72 },
+};
+const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+/** Load, turn the nose toward +x, scale to real size, sit it on the ground, matte the paint. */
+function loadAirModel(key) {
+  const sp = MODEL_SPECS[key];
+  return gltfLoader.loadAsync(sp.url).then((gltf) => {
+    const root = gltf.scene;
+    root.rotation.y = sp.yaw;
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = false;
+      for (const m of [].concat(o.material)) {
+        if (sp.fullColour) m.color?.setScalar(1); // the A320 export darkens its livery
+        if ('roughness' in m) { m.roughness = Math.max(m.roughness ?? 1, 0.55); m.metalness = Math.min(m.metalness ?? 0, 0.15); }
+      }
+    });
+    const inner = new THREE.Group();
+    inner.add(root);
+    inner.updateMatrixWorld(true);
+    unskin(root);
+    const b = new THREE.Box3().setFromObject(inner, true), size = b.getSize(new THREE.Vector3()), c = b.getCenter(new THREE.Vector3());
+    const s = sp.length ? sp.length / size.x : sp.height / size.y;
+    inner.scale.setScalar(s);
+    inner.position.set(-c.x * s, -b.min.y * s, -c.z * s);
+    const wrap = new THREE.Group();
+    wrap.add(inner);
+    wrap.userData.height = size.y * s;
+    return wrap;
+  });
+}
+// each model swaps in on its own as soon as it arrives (the A320 is small, the Cessna is the heaviest)
+const airModels = Object.fromEntries(Object.keys(MODEL_SPECS).map((k) => [k, loadAirModel(k).catch((e) => { console.warn('model', k, e); return null; })]));
+
+/** Replace rigged meshes with plain ones frozen in their rest pose (the Cessna arrives rigged). */
+function unskin(root) {
+  const skinned = [];
+  root.traverse((o) => { if (o.isSkinnedMesh) skinned.push(o); });
+  const v = new THREE.Vector3();
+  for (const sm of skinned) {
+    sm.skeleton.update();
+    const src = sm.geometry, pos = src.attributes.position, out = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      sm.applyBoneTransform(i, v);
+      out.set([v.x, v.y, v.z], i * 3);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(out, 3));
+    if (src.attributes.uv) geo.setAttribute('uv', src.attributes.uv);
+    if (src.index) geo.setIndex(src.index);
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, sm.material);
+    m.name = sm.name;
+    m.position.copy(sm.position); m.quaternion.copy(sm.quaternion); m.scale.copy(sm.scale);
+    sm.parent.add(m);
+    sm.removeFromParent();
+  }
+  if (skinned.length) root.updateMatrixWorld(true);
+}
+
+/** Several copies of one model, merged into a handful of meshes (for parked aircraft). */
+function parkedGroup(model, placements) {
+  const g = new THREE.Group();
+  for (const [x, z, yaw] of placements) {
+    const c = SkeletonUtils.clone(model);
+    c.position.set(x, 0, z);
+    c.rotation.y = yaw;
+    g.add(c);
+  }
+  return bakeGroup(g);
+}
+
+function upgradeAirside(md) {
+  const air = AIRSIDE.root, P = AIRSIDE.placeholders;
+  if (md.c182) {
+    const spots = P.trainers.map((t) => [t.position.x, t.position.z, t.rotation.y]);
+    P.trainers.forEach((t) => t.removeFromParent());
+    air.add(parkedGroup(md.c182, spots));
+  }
+  if (md.a320) {
+    const spots = P.jets.map((j) => [j.position.x, j.position.z, j.rotation.y]);
+    P.jets.forEach((j) => j.removeFromParent());
+    air.add(parkedGroup(md.a320, spots));
+    // the moving traffic flies the same loop with the real A320, plus beacons, strobes and a landing light
+    for (const m of AIRSIDE.movers) {
+      const g = new THREE.Group();
+      g.rotation.order = 'YZX';
+      g.add(SkeletonUtils.clone(md.a320));
+      blinker(glowPoints([[0, 6.2, 0], [0, 1.6, 0]], 0xff3a20, 3, g), 1.2, 0, 0.15);
+      blinker(glowPoints([[-3.5, 4.4, -17], [-3.5, 4.4, 17]], 0xffffff, 4, g), 1.0, 0.3, 0.08);
+      glowPoints([[-3.5, 4.4, -17]], 0xff2a1a, 2, g);
+      glowPoints([[-3.5, 4.4, 17]], 0x2aff6a, 2, g);
+      glowPoints([[17.5, 2.6, 0]], 0xfff1d6, 7, g); // landing light
+      g.visible = m.g.visible;
+      m.g.removeFromParent();
+      air.add(g);
+      m.g = g;
+      m.lift = 0;
+    }
+  }
+  if (md.g650) air.add(parkedGroup(md.g650, [[96, -44, -Math.PI / 2 + 0.35]])); // the academy's business jet by its hangar
+  if (md.tower) {
+    P.tower.removeFromParent();
+    md.tower.position.set(-260, 0, -175);
+    air.add(md.tower);
+    AIRSIDE.towerLight.position.set(-260, md.tower.userData.height + 0.6, -175);
+  }
+}
+
 function buildAirside() {
   const air = new THREE.Group();
+  air.visible = false; // shown once the camera heads airside (see updateAirside)
   scene.add(air);
   AIRSIDE.root = air;
   GLOW = canvasTex(64, 64, (g, w, h) => {
@@ -1919,12 +2051,17 @@ function buildAirside() {
 
   // control tower, off to the west, by the sunset
   const tx = -260, tz = -175;
-  cyl(3.2, 4.2, 40, M.concrete, tx, 20, tz, air, 24);
-  cyl(7.2, 6.4, 1.2, M.concrete, tx, 40.6, tz, air, 8);
-  cyl(7.0, 6.2, 5, new THREE.MeshStandardMaterial({ color: 0x1b2a3a, emissive: 0x7fb3d6, emissiveIntensity: 0.35, roughness: 0.3 }), tx, 43.7, tz, air, 8);
-  cyl(7.8, 7.8, 0.9, M.claddingDeep, tx, 46.6, tz, air, 8);
-  cyl(0.15, 0.15, 6, M.metal, tx, 50, tz, air, 6);
-  blinker(mesh(new THREE.SphereGeometry(0.35, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3020 }), tx, 53.1, tz, air), 1.6, 0, 0.5);
+  const tower = new THREE.Group();
+  cyl(3.2, 4.2, 40, M.concrete, tx, 20, tz, tower, 24);
+  cyl(7.2, 6.4, 1.2, M.concrete, tx, 40.6, tz, tower, 8);
+  cyl(7.0, 6.2, 5, new THREE.MeshStandardMaterial({ color: 0x1b2a3a, emissive: 0x7fb3d6, emissiveIntensity: 0.35, roughness: 0.3 }), tx, 43.7, tz, tower, 8);
+  cyl(7.8, 7.8, 0.9, M.claddingDeep, tx, 46.6, tz, tower, 8);
+  cyl(0.15, 0.15, 6, M.metal, tx, 50, tz, tower, 6);
+  bakeGroup(tower).userData.dynamic = true; // a placeholder until the Delhi ATC tower model arrives
+  air.add(tower);
+  AIRSIDE.placeholders.tower = tower;
+  AIRSIDE.towerLight = blinker(mesh(new THREE.SphereGeometry(0.35, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3020 }), tx, 53.1, tz, air), 1.6, 0, 0.5);
+  AIRSIDE.towerLight.userData.dynamic = true;
 
   // academy hangar with the logo, to the east
   const hx = 120, hz = -75;
@@ -1957,10 +2094,12 @@ function buildAirside() {
   // the academy's own fleet: four trainers in brand colours, close to the building
   const fleet = [M.paintNavy, M.paintNavy, new THREE.MeshStandardMaterial({ color: 0x1f6f8a, roughness: 0.7 }), M.paintNavy];
   [-10, -22, -34, -46].forEach((x, i) => {
-    const tr = trainer(fleet[i]);
+    const tr = bakeGroup(trainer(fleet[i]));
     tr.position.set(x, 0, -50);
     tr.rotation.y = -Math.PI / 2 + (i === 2 ? 0.25 : 0);
+    tr.userData.dynamic = true; // a placeholder until the Cessna 182 model arrives
     air.add(tr);
+    AIRSIDE.placeholders.trainers.push(tr);
     blob(x, -50, 11, 9);
     for (const s of [-1, 1]) cyl(0.08, 0.15, 0.45, new THREE.MeshStandardMaterial({ color: 0xff6a1a, roughness: 0.8 }), x + s * 5.6, 0.22, -49.2, air, 10); // wingtip cones
   });
@@ -1968,11 +2107,13 @@ function buildAirside() {
   // parked airliners on their stands, nose toward the building
   const tails = [new THREE.MeshStandardMaterial({ color: 0xa8322d, roughness: 0.7 }), M.paintNavy, new THREE.MeshStandardMaterial({ color: 0x1f7a7a, roughness: 0.7 })];
   STANDS.forEach((x, i) => {
-    const jet = airliner({ tail: tails[i], gear: true });
+    const jet = bakeGroup(airliner({ tail: tails[i], gear: true }));
     jet.scale.setScalar(40);
     jet.position.set(x, 4.2, -86);
     jet.rotation.y = -Math.PI / 2;
+    jet.userData.dynamic = true; // a placeholder until the A320 model arrives
     air.add(jet);
+    AIRSIDE.placeholders.jets.push(jet);
     blob(x, -86, 40, 42);
     for (const dz of [-2, 2]) cyl(0.12, 0.25, 0.7, new THREE.MeshStandardMaterial({ color: 0xff6a1a, roughness: 0.8 }), x + 2.5, 0.35, -66 + dz, air, 10);
   });
@@ -1993,7 +2134,7 @@ function buildAirside() {
     air.add(g);
     const sh = blob(0, 0, 40, 42);
     sh.userData.dynamic = true;
-    AIRSIDE.movers.push({ g, shadow: sh, offset: (i / liveries.length) * route.T, s: {} });
+    AIRSIDE.movers.push({ g, shadow: sh, lift: 4.2, offset: (i / liveries.length) * route.T, s: {} });
   });
   // two of the academy's trainers flying circuits over the field
   for (let i = 0; i < 2; i++) {
@@ -2058,6 +2199,8 @@ function updateAirside(now) {
   const on = camera.position.z < -13.5;
   if (on !== AIRSIDE.active) {
     AIRSIDE.active = on;
+    // the aircraft models only draw once the camera heads airside (they sit behind the lobby's back wall)
+    AIRSIDE.root.visible = on;
     AIRSIDE.movers.forEach((m) => { m.g.visible = on; m.shadow.visible = on; });
   }
   // back sliding doors open as the camera reaches them, whichever way it is going
@@ -2067,7 +2210,7 @@ function updateAirside(now) {
   const t = now / 1000;
   for (const m of AIRSIDE.movers) {
     const s = sampleRoute(AIRSIDE.route, t + m.offset, m.s);
-    m.g.position.set(s.x, s.y + 4.2, s.z);
+    m.g.position.set(s.x, s.y + m.lift, s.z);
     m.g.rotation.set(0, s.h, s.p);
     m.shadow.position.set(s.x, 0.07, s.z);
     m.shadow.material.opacity = 1;
@@ -2274,6 +2417,7 @@ async function init() {
   buildExterior();
   buildLobby();
   buildAirside();
+  for (const [k, pr] of Object.entries(airModels)) pr.then((m) => m && upgradeAirside({ [k]: m }));
   uDoor = computeDoorU();
 
   // Glass and logo planes should not throw shadows into the lobby
@@ -2285,7 +2429,7 @@ async function init() {
   renderer.shadowMap.autoUpdate = false; // nothing that casts shadows moves, so bake them once
   renderer.shadowMap.needsUpdate = true;
 
-  window.__cc = { renderer, scene, camera, AIRSIDE, setP: (v) => { targetP = p = v; } }; // debug handle
+  window.__cc = { renderer, scene, camera, AIRSIDE, look: (x, y, z) => roomCam.look.set(x, y, z), setP: (v) => { targetP = p = v; } }; // debug handle
   setupScroll();
   onResize();
   // ?p=0.5 jumps the walk to that point (handy for screenshots)
@@ -2388,7 +2532,7 @@ const COURSES = {
     points: ['FTOs by country and location, including partner schools', 'Training programmes and licence pathways offered', 'Facilities and fleet information where verified', 'Entry requirements, indicative duration and costs'],
     // out the back door, up the spotters' stair, onto the deck
     via: [[0, 1.62, -12.0], [0, 1.62, -14.3], [0, 1.64, -18.5], [0, 1.66, -22.6], [0.6, 1.7, -24.8], [2.3, 1.8, -26.4], [4.5, 3.4, -27.0], [9.5, 7.0, -27.0], [12.8, 9.55, -27.1], [14.6, 9.7, -27.6]],
-    pos: [15.8, 9.7, -28.6], look: [-40, 4, -270],
+    pos: [15.8, 9.7, -28.6], look: [-42, -4, -190],
     doorLook: [0, 1.6, -40], split: 0.62, dur: 9,
   },
 };
@@ -2494,6 +2638,7 @@ function showCard(id) {
   card.querySelector('[data-f="lede"]').textContent = c.lede;
   card.querySelector('[data-f="points"]').replaceChildren(...c.points.map((t) => Object.assign(document.createElement('li'), { textContent: t })));
   card.dataset.side = c.side;
+  setCardCollapsed(false);
   card.hidden = false;
   requestAnimationFrame(() => card.classList.add('is-open'));
   document.getElementById('roomBack').focus({ preventScroll: true });
@@ -2502,6 +2647,13 @@ function hideCard() {
   card.classList.remove('is-open');
   setTimeout(() => { if (!card.classList.contains('is-open')) card.hidden = true; }, 500);
 }
+function setCardCollapsed(on) {
+  card.classList.toggle('is-collapsed', on);
+  const t = document.getElementById('roomToggle');
+  t.setAttribute('aria-expanded', String(!on));
+  t.querySelector('[data-label]').textContent = on ? 'Details' : 'Hide';
+}
+document.getElementById('roomToggle').addEventListener('click', () => setCardCollapsed(!card.classList.contains('is-collapsed')));
 document.getElementById('roomBack').addEventListener('click', leaveRoom);
 addEventListener('keydown', (e) => { if (e.key === 'Escape') leaveRoom(); });
 document.querySelectorAll('[data-room]').forEach((b) => b.addEventListener('click', () => enterRoom(b.dataset.room)));
