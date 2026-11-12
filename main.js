@@ -1836,6 +1836,160 @@ function fuelTruck() {
   return g;
 }
 
+/* ---------- Ground support equipment and jet bridges (sizes from real A320 turnarounds) ---------- */
+let GSEM = null;
+function gseMats() {
+  if (GSEM) return GSEM;
+  const std = (c, r = 0.75, m = 0) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
+  GSEM = { white: std(0xe9e7e2), yellow: std(0xe3b62b), orange: std(0xd8742a), grey: std(0x6b6f76, 0.6, 0.4), steel: std(0xa9adb3, 0.5, 0.6),
+    tyre: std(0x161616, 0.95), rubber: std(0x202020, 0.9), belt: std(0x2b2b2b, 0.9), red: std(0xb3262b, 0.8), navy: M.paintNavy,
+    bridge: std(0xc3c6ca, 0.55, 0.5), bridgeDark: std(0x5c6168, 0.6, 0.4), glass: std(0x2a3a4a, 0.15, 0.6) };
+  return GSEM;
+}
+const wheels = (g, pts, r = 0.4, w = 0.28) => { for (const [x, z] of pts) cyl(r, r, w, gseMats().tyre, x, r, z, g, 14).rotation.x = Math.PI / 2; };
+/** a self-propelled passenger stair truck; the top platform at +x end, sill height h */
+function airstairs(h = 3.4) {
+  const G = gseMats(), g = new THREE.Group();
+  box(7.2, 0.5, 2.2, G.white, 3.8, 0.75, 0, g);
+  box(1.8, 1.4, 2.2, G.white, 6.6, 1.6, 0, g);
+  box(1.0, 0.7, 2.0, G.glass, 6.9, 1.9, 0, g);
+  const run = 5.6, len = Math.hypot(run, h - 1.0), ang = Math.atan2(h - 1.0, run);
+  const flight = new THREE.Group();
+  box(len, 0.15, 1.5, G.grey, 0, 0, 0, flight);
+  for (let i = 0; i < 14; i++) box(0.04, 0.2, 1.5, G.steel, -len / 2 + (i + 0.5) * len / 14, 0.12, 0, flight);
+  for (const sz of [-0.8, 0.8]) { box(len, 0.06, 0.06, G.yellow, 0, 1.0, sz, flight); box(len, 0.9, 0.04, G.white, 0, 0.5, sz, flight); }
+  flight.rotation.z = -ang;
+  flight.position.set(run / 2 + 0.4, (h + 1.0) / 2 + 0.1, 0);
+  g.add(flight);
+  box(1.6, 0.15, 1.6, G.grey, -0.6, h, 0, g); // top landing at the door
+  for (const sz of [-0.8, 0.8]) box(1.6, 1.0, 0.05, G.white, -0.6, h + 0.55, sz, g);
+  box(0.3, 2.4, 0.3, G.grey, -0.2, h + 1.0, 0.82, g).position.y = h + 1.2; // canopy post
+  box(2.0, 0.08, 2.0, G.white, -0.4, h + 2.35, 0, g); // canopy
+  wheels(g, [[1.2, -1.05], [1.2, 1.05], [6.4, -1.05], [6.4, 1.05]]);
+  return g;
+}
+/** belt loader: a chassis with an inclined conveyor rising toward -x */
+function beltLoader(h = 2.0) {
+  const G = gseMats(), g = new THREE.Group();
+  box(6.4, 0.45, 1.8, G.yellow, 0, 0.7, 0, g);
+  box(1.2, 1.2, 1.0, G.yellow, 1.8, 1.4, 0.55, g);
+  const len = 8.2, ang = Math.atan2(h - 0.9, 7.6);
+  const belt = new THREE.Group();
+  box(len, 0.25, 1.0, G.grey, 0, 0, 0, belt);
+  box(len, 0.06, 0.8, G.belt, 0, 0.15, 0, belt);
+  for (const sz of [-0.55, 0.55]) box(len, 0.25, 0.06, G.yellow, 0, 0.3, sz, belt);
+  belt.rotation.z = -ang;
+  belt.position.set(-0.4, (h + 0.9) / 2 + 0.2, 0);
+  g.add(belt);
+  for (const x of [-1.2, 1.4]) box(0.15, 1.2, 0.15, G.grey, x, 1.2, 0, g);
+  wheels(g, [[-2.3, -0.95], [-2.3, 0.95], [2.3, -0.95], [2.3, 0.95]], 0.35, 0.25);
+  return g;
+}
+/** catering high-loader: cab in front (+x), white body raised on a scissor lift to door height */
+function cateringTruck(h = 3.4) {
+  const G = gseMats(), g = new THREE.Group();
+  box(8.0, 0.6, 2.4, G.grey, 0, 0.85, 0, g);
+  box(2.0, 2.0, 2.4, G.white, 3.2, 2.0, 0, g);
+  box(0.9, 0.9, 2.3, G.glass, 3.9, 2.4, 0, g);
+  for (const sz of [-0.8, 0.8]) { const a = box(5.4, 0.12, 0.12, G.steel, -1.2, (h + 1.1) / 2, sz, g); a.rotation.z = 0.45; const b = box(5.4, 0.12, 0.12, G.steel, -1.2, (h + 1.1) / 2, sz, g); b.rotation.z = -0.45; }
+  box(6.0, 2.6, 2.5, G.white, -1.2, h + 1.3, 0, g);
+  box(6.02, 0.35, 2.52, G.navy, -1.2, h + 0.25, 0, g);
+  box(1.6, 0.12, 2.0, G.grey, -4.9, h + 0.05, 0, g); // platform to the door
+  wheels(g, [[-2.6, -1.15], [-2.6, 1.15], [3.0, -1.15], [3.0, 1.15]], 0.5, 0.3);
+  return g;
+}
+/** ground power unit on a small towed cart */
+function gpu() {
+  const G = gseMats(), g = new THREE.Group();
+  box(2.6, 1.3, 1.4, G.white, 0, 1.0, 0, g);
+  box(2.62, 0.2, 1.42, G.orange, 0, 0.55, 0, g);
+  box(1.0, 0.04, 0.04, G.belt, -1.8, 0.4, 0, g);
+  wheels(g, [[-0.9, -0.75], [-0.9, 0.75], [0.9, -0.75], [0.9, 0.75]], 0.3, 0.2);
+  return g;
+}
+/** towbarless pushback tug: long, low and wide */
+function pushbackTug() {
+  const G = gseMats(), g = new THREE.Group();
+  box(7.5, 1.3, 3.6, G.yellow, 0, 0.95, 0, g);
+  box(1.2, 1.2, 1.2, G.glass, 2.9, 2.2, 1.0, g);
+  box(1.3, 0.1, 1.3, G.yellow, 2.9, 2.85, 1.0, g);
+  box(1.6, 0.25, 2.2, G.grey, -3.4, 0.55, 0, g); // nose-gear cradle
+  wheels(g, [[-2.2, -1.85], [-2.2, 1.85], [2.4, -1.85], [2.4, 1.85]], 0.6, 0.45);
+  return g;
+}
+/** an apron bus (Cobus-type): long, low, glass all round */
+function apronBus(livery = 0x111c44) {
+  const G = gseMats(), g = new THREE.Group();
+  box(14, 2.4, 3.0, G.white, 0, 1.75, 0, g);
+  box(13.6, 1.1, 3.04, G.glass, 0, 2.1, 0, g);
+  box(14.02, 0.35, 3.02, new THREE.MeshStandardMaterial({ color: livery, roughness: 0.7 }), 0, 0.75, 0, g);
+  box(14, 0.15, 3.0, G.grey, 0, 3.0, 0, g);
+  for (const x of [-4.2, 0, 4.2]) box(1.4, 2.0, 0.05, G.glass, x, 1.6, 1.53, g); // doors
+  wheels(g, [[-5.2, -1.4], [-5.2, 1.4], [5.2, -1.4], [5.2, 1.4]], 0.5, 0.3);
+  return g;
+}
+/** stand number board on a pole, readable from the flight deck */
+function standBoard(txt) {
+  const G = gseMats(), g = new THREE.Group();
+  cyl(0.1, 0.1, 6, G.grey, 0, 3, 0, g, 8);
+  const tex = canvasTex(256, 256, (c, w, h) => {
+    c.fillStyle = '#e3b62b'; c.fillRect(0, 0, w, h);
+    c.fillStyle = '#111'; c.font = FONT(700, 150); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, w / 2, h / 2 + 8);
+  });
+  const sm = new THREE.MeshBasicMaterial({ map: tex });
+  box(1.6, 1.6, 0.12, [G.grey, G.grey, G.grey, G.grey, sm, sm], 0, 6.6, 0, g);
+  return g;
+}
+/** an apron-drive jet bridge from a rotunda at (rx, rz) to the aircraft door at (dx, dz), sill height h */
+function jetBridge(rx, rz, dx, dz, h = 3.4, parent) {
+  const G = gseMats(), g = new THREE.Group();
+  const yaw = Math.atan2(-(dz - rz), dx - rx), len = Math.hypot(dx - rx, dz - rz);
+  cyl(2.6, 2.6, 3.4, G.bridge, rx, h + 1.4, rz, g, 18); // rotunda
+  cyl(0.5, 0.6, h - 0.3, G.bridgeDark, rx, (h - 0.3) / 2, rz, g, 10);
+  const t = new THREE.Group();
+  t.position.set(rx, 0, rz);
+  t.rotation.y = yaw;
+  const cabLen = 3.2, tun = len - 2.6 - cabLen + 0.4, seg = tun / 3;
+  [[3.4, 3.2], [3.15, 3.0], [2.9, 2.8]].forEach(([w, hh], i) => { // three telescopic sections
+    const x = 2.4 + seg * (i + 0.5) + i * 0.15;
+    box(seg + 0.3, hh, w, G.bridge, x, h + 1.4, 0, t);
+    box(seg, 1.0, w + 0.04, G.glass, x, h + 1.8, 0, t);
+    box(seg + 0.32, 0.2, w + 0.02, G.bridgeDark, x, h + 1.4 - hh / 2 + 0.1, 0, t);
+  });
+  const legX = 2.4 + seg * 2.4;
+  for (const sz of [-1.1, 1.1]) box(0.35, h - 0.1, 0.35, G.bridgeDark, legX, (h - 0.1) / 2 + 0.3, sz, t);
+  box(0.6, 0.5, 3.0, G.bridgeDark, legX, 0.55, 0, t); // drive bogie
+  for (const sz of [-1.0, 1.0]) cyl(0.45, 0.45, 0.4, G.tyre, legX, 0.45, sz, t, 14).rotation.x = Math.PI / 2;
+  const cx = len - cabLen / 2;
+  box(cabLen, 3.3, 3.8, G.bridge, cx, h + 1.4, 0, t);
+  box(cabLen - 0.4, 1.0, 3.84, G.glass, cx, h + 1.9, 0, t);
+  box(0.6, 3.0, 3.0, G.rubber, len + 0.2, h + 1.3, 0, t); // canopy bellows at the door
+  g.add(t);
+  parent.add(g);
+  return g;
+}
+/** everything a parked A320 has round it mid-turnaround. Nose points along +z (dir 1) or -z (dir -1), centre (x, z). */
+function turnaround(x, z, dir, standNo, parent, { bus = true } = {}) {
+  const put = (o, px, pz, yaw) => { o.position.set(px, 0, pz); o.rotation.y = yaw; parent.add(o); return o; };
+  const nose = z + dir * 18.8, left = dir; // aircraft's left lies toward +x when the nose points +z
+  const fwdDoorZ = nose - dir * 4.6, aftDoorZ = nose - dir * 30.6;
+  put(airstairs(), x + left * 2.4, fwdDoorZ, left > 0 ? 0 : Math.PI);
+  put(airstairs(), x + left * 2.4, aftDoorZ, left > 0 ? 0 : Math.PI);
+  put(beltLoader(), x - left * 2.6, nose - dir * 9.0, left > 0 ? Math.PI : 0);
+  put(beltLoader(1.9), x - left * 2.6, nose - dir * 25.5, left > 0 ? Math.PI : 0);
+  put(cateringTruck(), x - left * 7.4, aftDoorZ, left > 0 ? Math.PI : 0);
+  put(gpu(), x - left * 4.5, nose - dir * 1.5, Math.PI / 2);
+  put(pushbackTug(), x, nose + dir * 6.5, dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+  if (bus) put(apronBus(), x + left * 26, z + dir * 14, Math.PI / 2);
+  put(standBoard(standNo), x + 4, nose + dir * 12, dir > 0 ? 0 : Math.PI);
+  const G = gseMats();
+  for (const s of [-1, 1]) box(0.25, 0.2, 0.4, G.yellow, x + s * 0.5, 0.1, nose - dir * 5.2, parent); // nose-gear chocks
+  for (const s of [-1, 1]) box(0.6, 0.25, 0.3, G.yellow, x + s * 3.8, 0.12, z - dir * 0.6, parent); // main-gear chocks
+  // stand safety lines: red equipment-restraint box and a white walkway at the forward door
+  box(48, 0.01, 0.3, G.red, x, 0.036, nose + dir * 2, parent, { cast: false });
+  for (const s of [-1, 1]) box(0.3, 0.01, 44, G.red, x + s * 24, 0.036, z, parent, { cast: false });
+}
+
 /** The arrival-to-departure loop every moving airliner flies, sampled every 0.25 s. */
 function buildRoute() {
   const dt = 0.25, S = [];
@@ -2365,6 +2519,7 @@ function buildAirside() {
   ft.position.set(-58, 0, -78); ft.rotation.y = Math.PI / 2 + 0.2;
   air.add(ft);
   blob(-58, -78, 5, 11);
+  STANDS.forEach((x, i) => turnaround(x, -86, 1, `${31 + i}`, air, { bus: i !== 2 }));
 
   // moving traffic: four airliners on the loop, a follow-me car and a baggage train
   const tailMat = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.7 });
@@ -2454,11 +2609,15 @@ function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
   const GATES = [-680, -600, -520, -440, -360, -120, -40, 40];
   GATES.forEach((gx, i) => {
     const jz = TZ + 34;
-    box(3.2, 3.2, 14, bridge, gx - 4, 4.8, TZ + 7, term);
-    cyl(2.4, 2.4, 3.6, bridge, gx - 4, 4.8, TZ + 14.5, term, 14);
-    for (const dz of [10, 14.5]) cyl(0.25, 0.25, 3.2, M.metalDark, gx - 4, 1.6, TZ + dz, term, 8);
     box(0.3, 0.01, 40, yellow, gx, 0.035, jz + 8, air, { cast: false });
-    if (i % 4 === 3) return; // an empty stand here and there
+    box(4, 6, 4, bridge, gx - 15, 3, TZ + 2, term); // the bridge's fixed link out of the terminal
+    if (i % 4 === 3) { jetBridge(gx - 15, TZ + 6, gx - 12, TZ + 12, 3.4, term); return; } // an empty stand, bridge parked
+    jetBridge(gx - 15, TZ + 6, gx - 2.4, jz - 18.8 + 4.6, 3.4, term);
+    const G = gseMats();
+    for (const [o, px, pz, yaw] of [[beltLoader(), gx + 2.6, jz - 9.8, 0], [gpu(), gx + 4.5, jz - 17.3, Math.PI / 2], [cateringTruck(), gx + 7.4, jz + 11.8, 0]]) {
+      o.position.set(px, 0, pz); o.rotation.y = yaw; term.add(o);
+    }
+    box(0.6, 0.25, 0.3, G.yellow, gx, 0.12, jz - 14, term);
     const jet = bakeGroup(airliner({ tail: M.paintNavy, gear: true }));
     jet.scale.setScalar(40);
     jet.position.set(gx, 4.2, jz);
