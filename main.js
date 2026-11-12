@@ -1608,7 +1608,7 @@ function studentChair(x, z) {
 /* ---------- Door C, the corridor and the airside ---------- */
 // The airside opens behind the building (z < -23), facing west into the sunset. The runway runs
 // east-west 300 m out; four airliners fly one loop (land, taxi, line up, take off) at staggered times.
-const AIRSIDE = { root: null, movers: [], blinkers: [], vehicles: [], backLeaves: [], rabbit: null, route: null, active: false, placeholders: { trainers: [], jets: [], tower: null } };
+const AIRSIDE = { root: null, movers: [], blinkers: [], vehicles: [], backLeaves: [], rabbit: null, route: null, active: false, placeholders: { trainers: [], jets: [], tower: null, gse: [] } };
 const RWY_Z = -322, TWY_Z = -135, RWY_THR = 760, RWY_END = -1700;
 let GLOW = null, RUNWAY_MAT = null;
 
@@ -1888,6 +1888,7 @@ function beltLoader(h = 2.0) {
 /** catering high-loader: cab in front (+x), white body raised on a scissor lift to door height */
 function cateringTruck(h = 3.4) {
   const G = gseMats(), g = new THREE.Group();
+  g.userData.isCater = true;
   box(8.0, 0.6, 2.4, G.grey, 0, 0.85, 0, g);
   box(2.0, 2.0, 2.4, G.white, 3.2, 2.0, 0, g);
   box(0.9, 0.9, 2.3, G.glass, 3.9, 2.4, 0, g);
@@ -1940,6 +1941,8 @@ function standBoard(txt) {
   box(1.6, 1.6, 0.12, [G.grey, G.grey, G.grey, G.grey, sm, sm], 0, 6.6, 0, g);
   return g;
 }
+/** a code-built vehicle that a real model replaces once it loads */
+function gseSpot(o, kind) { o.userData.dynamic = true; o.userData.gse = kind; AIRSIDE.placeholders.gse.push(o); return o; }
 /** an apron-drive jet bridge from a rotunda at (rx, rz) to the aircraft door at (dx, dz), sill height h */
 function jetBridge(rx, rz, dx, dz, h = 3.4, parent) {
   const G = gseMats(), g = new THREE.Group();
@@ -1977,9 +1980,9 @@ function turnaround(x, z, dir, standNo, parent, { bus = true } = {}) {
   put(airstairs(), x + left * 2.4, aftDoorZ, left > 0 ? 0 : Math.PI);
   put(beltLoader(), x - left * 2.6, nose - dir * 9.0, left > 0 ? Math.PI : 0);
   put(beltLoader(1.9), x - left * 2.6, nose - dir * 25.5, left > 0 ? Math.PI : 0);
-  put(cateringTruck(), x - left * 7.4, aftDoorZ, left > 0 ? Math.PI : 0);
+  gseSpot(put(cateringTruck(), x - left * 7.4, aftDoorZ, left > 0 ? Math.PI : 0), 'cater');
   put(gpu(), x - left * 4.5, nose - dir * 1.5, Math.PI / 2);
-  put(pushbackTug(), x, nose + dir * 6.5, dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+  gseSpot(put(pushbackTug(), x, nose + dir * 6.5, dir > 0 ? Math.PI / 2 : -Math.PI / 2), 'tug');
   if (bus) put(apronBus(), x + left * 26, z + dir * 14, Math.PI / 2);
   put(standBoard(standNo), x + 4, nose + dir * 12, dir > 0 ? 0 : Math.PI);
   const G = gseMats();
@@ -2041,6 +2044,9 @@ const MODEL_SPECS = {
   b_vir: { url: 'models/b789_vir.glb', yaw: Math.PI / 2, length: 62.8, livery: true },
   b_baw: { url: 'models/b789_baw.glb', yaw: Math.PI / 2, length: 62.8, livery: true },
 };
+// ground vehicles from Sketchfab: "GameAsset - Airport Pushback" by Loic ALIX (CC BY-NC 4.0), "Airport Catering Truck" by spot1studios (CC BY 4.0)
+MODEL_SPECS.tug = { url: 'models/pushback_tug.glb', yaw: -Math.PI / 2, length: 9.0, keepOne: true };
+MODEL_SPECS.cater = { url: 'models/catering_truck.glb', yaw: -Math.PI / 2, length: 9.13 };
 const LIVERY_KEYS = ['n_igo', 'n_aic', 'n_vti', 'b_vir', 'b_baw'];
 const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 /** a float copy of any attribute, read straight off its typed array (getX per element is far too slow at 100k+) */
@@ -2063,6 +2069,12 @@ function loadAirModel(key) {
   return gltfLoader.loadAsync(sp.url).then((gltf) => {
     const root = gltf.scene;
     root.rotation.y = sp.yaw;
+    if (sp.keepOne) { // the tug file holds two copies side by side: keep the one at -x
+      root.updateMatrixWorld(true);
+      const drop = [];
+      root.traverse((o) => { if (o.isMesh && new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3()).applyAxisAngle(new THREE.Vector3(0, 1, 0), -sp.yaw).x > 0) drop.push(o); });
+      drop.forEach((o) => o.removeFromParent());
+    }
     root.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = false;
@@ -2369,6 +2381,13 @@ function upgradeAirside(md) {
     for (const m of AIRSIDE.movers) if (!m.real) swapMover(m, md.a320, 1);
   }
   if (md.t3) { P.hall?.removeFromParent(); air.add(md.t3); }
+  for (const kind of ['tug', 'cater']) {
+    if (!md[kind]) continue;
+    const mine = P.gse.filter((o) => o.userData.gse === kind && o.parent);
+    const spots = mine.map((o) => { const v = o.getWorldPosition(new THREE.Vector3()); return [v.x, v.z, o.rotation.y]; });
+    mine.forEach((o) => o.removeFromParent());
+    air.add(parkedGroup(md[kind], spots));
+  }
   if (md.g650) air.add(parkedGroup(md.g650, [[96, -44, -Math.PI / 2 + 0.35]])); // the academy's business jet by its hangar
   if (md.tower) {
     P.tower.removeFromParent();
@@ -2652,6 +2671,7 @@ function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
     const G = gseMats();
     for (const [o, px, pz, yaw] of [[beltLoader(), gx + 2.6, nz + 9, 0], [gpu(), gx + 4.5, nz + 1.5, Math.PI / 2], [cateringTruck(), gx + 7.4, nz + 30.6, 0]]) {
       o.position.set(px, 0, pz); o.rotation.y = yaw; term.add(o);
+      if (o.userData.isCater) gseSpot(o, 'cater');
     }
     box(0.6, 0.25, 0.3, G.yellow, gx, 0.12, nz + 5, term);
     const jet = bakeGroup(airliner({ tail: M.paintNavy, gear: true }));
@@ -3116,9 +3136,10 @@ const COURSES = {
     lede: 'Step airside and explore where you could fly next: flight training organisations and partner schools in different countries, side by side.',
     points: ['FTOs by country and location, including partner schools', 'Training programmes and licence pathways offered', 'Facilities and fleet information where verified', 'Entry requirements, indicative duration and costs'],
     // out the back door, up the spotters' stair, onto the deck
-    via: [[0, 1.62, -12.0], [0, 1.62, -14.3], [0, 1.64, -18.5], [0, 1.66, -22.6], [0.6, 1.7, -24.8], [2.3, 1.8, -26.4], [4.5, 3.4, -27.0], [9.5, 7.0, -27.0], [12.8, 9.55, -27.1], [14.6, 9.7, -27.6]],
-    pos: [15.8, 9.7, -28.6], look: [-42, -4, -190],
-    doorLook: [0, 1.6, -40], split: 0.62, dur: 9,
+    via: [[0, 1.62, -12.0], [0, 1.62, -14.3], [0, 1.64, -18.5], [0, 1.66, -22.6], [0.6, 1.7, -24.8], [2.3, 1.8, -26.4], [4.5, 3.4, -27.0], [9.5, 7.0, -27.0], [12.8, 9.55, -27.1], [14.6, 9.7, -27.6], [15.8, 11, -40], [-20, 34, -150], [-220, 36, -320], [-400, 22, -410]],
+    // then lift off the deck, cross the runway and settle beside Terminal 3's pier with the gates in view
+    pos: [-470, 13, -436], look: [-170, 1, -505],
+    doorLook: [0, 1.6, -40], split: 0.5, dur: 12,
   },
 };
 let activeRoom = null;
