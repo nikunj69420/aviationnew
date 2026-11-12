@@ -2466,10 +2466,24 @@ function buildAirside() {
       box(22, 0.01, 1.8, white, x0 + dir * dx, 0.05, RWY_Z + s * (5 + j * 2.7), air, { cast: false });
     }
   }
+  // rubber laid down in the touchdown zones: heavy at the 28 end, where most traffic lands, lighter at the 10 end
+  // (tyre-gum texture from FlyerGaia's HeavySkidMark pack)
+  const gumTex = new THREE.TextureLoader().load('tex/tire_gum.png');
+  gumTex.colorSpace = THREE.SRGBColorSpace;
+  gumTex.anisotropy = MAX_ANISO;
+  const gum = new THREE.MeshStandardMaterial({ map: gumTex, transparent: true, opacity: 0.9, depthWrite: false, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2 });
+  const grng = mulberry32(10);
+  for (const [x0, dir, n] of [[RWY_THR, -1, 14], [RWY_END, 1, 7]]) for (let k = 0; k < n; k++) {
+    const dx = 120 + k * (n > 10 ? 55 : 80) + grng() * 30, len = 70 + grng() * 60, wid = 12 + grng() * 8;
+    const m = panel(wid, len, gum, x0 + dir * dx, 0.056, RWY_Z + (grng() - 0.5) * 5, 'up', air, { cast: false, receive: false });
+    m.rotation.z = Math.PI / 2;
+    m.renderOrder = 1;
+  }
   // taxiway and apron paint
   box(1460, 0.01, 0.3, yellow, 0, 0.04, TWY_Z, air, { cast: false });
   box(520, 0.01, 0.3, yellow, 0, 0.035, -104, air, { cast: false });
   for (const x of route.conn) box(0.3, 0.01, Math.abs(RWY_Z - TWY_Z), yellow, x, 0.04, (RWY_Z + TWY_Z) / 2, air, { cast: false });
+  for (const x of route.conn) holdLine(x, RWY_Z + 90, -1, yellow, air);
   const STANDS = [-125, -70, -15];
   for (const x of STANDS) { box(0.3, 0.01, 40, yellow, x, 0.035, -84, air, { cast: false }); box(6, 0.01, 0.4, yellow, x, 0.035, -63, air, { cast: false }); }
   for (let x = -250; x < 250; x += 6) box(3, 0.01, 0.2, white, x, 0.04, -36.6, air, { cast: false }); // road edge
@@ -2631,6 +2645,7 @@ function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
     panel(23, 50, tarmacAt(23, 50), x, 0.024, (RWY_Z - 30 + FTW) / 2 - 6, 'up', air);
     box(0.3, 0.01, 52, yellow, x, 0.04, (RWY_Z - 30 + FTW) / 2 - 6, air, { cast: false });
     for (let z = FTW + 8; z < RWY_Z - 30; z += 12) twc.push([x, 0.3, z]);
+    holdLine(x, RWY_Z - 62, 1, yellow, air);
   }
   glowPoints(twc, 0x52f08a, 1.6, air);
 
@@ -2727,6 +2742,13 @@ function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
   }
   blocks.userData.dynamic = true;
   air.add(blocks);
+}
+
+/** runway-holding position, ICAO pattern A across a 23 m taxiway: two solid lines, then two dashed ones on the
+    runway side (toward = -1 when the runway lies toward -z) */
+function holdLine(x, z, toward, mat, parent) {
+  for (let i = 0; i < 2; i++) box(23, 0.01, 0.3, mat, x, 0.042, z - toward * 0.6 * i, parent, { cast: false });
+  for (let i = 0; i < 2; i++) for (let d = -10.5; d <= 10.5; d += 2) box(1, 0.01, 0.3, mat, x + d, 0.042, z + toward * (1.2 + 0.6 * i), parent, { cast: false });
 }
 
 /** Spotters' deck behind the building: a steel stair up to a glass-railed platform 8 m up. */

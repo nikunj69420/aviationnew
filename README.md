@@ -21,6 +21,7 @@ and the tower are glTF models in `models/`.
 - Airline A320neo (FAIB, CFM) and Boeing 787-9 (AIG, Rolls-Royce) with their liveries: Alpha India Group AI aircraft, converted from MSFS and used with permission
 - Pushback tug: "GameAsset - Airport Pushback" by Loic ALIX (CC BY-NC 4.0): https://sketchfab.com/3d-models/gameasset-airport-pushback-b7fce88407db486fa9a082042424c15f
 - Catering truck: "Airport Catering Truck" by spot1studios (CC BY 4.0): https://sketchfab.com/3d-models/airport-catering-truck-289f4e2cfa3f4722b0476b1fc37681d8
+- Runway rubber deposits: tyre-gum texture from "BetterTaxiwayMarker and HeavySkidMark" (MSFS) by FlyerGaia, used with permission
 - Sky, HDRI and surface textures: Poly Haven (CC0), https://polyhaven.com
 
 ## Engine simulator
