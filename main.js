@@ -2128,7 +2128,7 @@ function loadSkyAndLight(skyMesh) {
     scene.environmentRotation.y = SKY_ROT;
     hdr.dispose();
   }).catch((e) => console.warn('hdr', e));
-  new THREE.TextureLoader().loadAsync('tex/sky_sunset.jpg').then((tex) => {
+  new THREE.TextureLoader().loadAsync('tex/sky_pink.jpg').then((tex) => {
     tex.mapping = THREE.EquirectangularReflectionMapping;
     tex.colorSpace = THREE.SRGBColorSpace;
     scene.background = tex;
@@ -3002,9 +3002,9 @@ async function init() {
   mark('furniture');
   const skyMesh = buildSky();
   // Sunset: lavender sky fill, low amber sun raking across the facade from the west
-  hemi = new THREE.HemisphereLight(0x8a88b8, 0x3a2c26, 0.6);
+  hemi = new THREE.HemisphereLight(0xb497c6, 0x3d2c2e, 0.6); // lavender-pink sky fill
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffb37a, 1.7);
+  const sun = new THREE.DirectionalLight(0xffa98e, 1.7); // rose-gold low sun
   sun.target.position.set(0, 0, 4);
   sun.position.copy(SUN_VEC).multiplyScalar(48).add(sun.target.position); // where the photographed sun sets
   scene.add(sun.target);
