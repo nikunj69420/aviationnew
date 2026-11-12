@@ -2034,7 +2034,14 @@ const MODEL_SPECS = {
   c182: { url: 'models/c182.glb', yaw: -Math.PI / 2, length: 8.8 }, // cabin interior stripped, simplified
   g650: { url: 'models/g650.glb', yaw: Math.PI / 2, length: 30.4 },
   tower: { url: 'models/delhi_atc_tower.glb', yaw: 0, height: 72 },
+  // AIG AI aircraft (FAIB A320neo CFM, AIG 787-9 RR), converted from their MSFS models with permission; gear baked down
+  n_igo: { url: 'models/a20n_igo.glb', yaw: Math.PI / 2, length: 37.57, livery: true },
+  n_aic: { url: 'models/a20n_aic.glb', yaw: Math.PI / 2, length: 37.57, livery: true },
+  n_vti: { url: 'models/a20n_vti.glb', yaw: Math.PI / 2, length: 37.57, livery: true },
+  b_vir: { url: 'models/b789_vir.glb', yaw: Math.PI / 2, length: 62.8, livery: true },
+  b_baw: { url: 'models/b789_baw.glb', yaw: Math.PI / 2, length: 62.8, livery: true },
 };
+const LIVERY_KEYS = ['n_igo', 'n_aic', 'n_vti', 'b_vir', 'b_baw'];
 const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 /** a float copy of any attribute, read straight off its typed array (getX per element is far too slow at 100k+) */
 function floatAttr(a) {
@@ -2080,6 +2087,19 @@ function loadAirModel(key) {
 }
 // each model swaps in on its own as soon as it arrives (the A320 is small, the Cessna is the heaviest)
 const airModels = Object.fromEntries(Object.keys(MODEL_SPECS).map((k) => [k, loadAirModel(k).catch((e) => { console.warn('model', k, e); return null; })]));
+// Terminal 3's pier from the VIDP scenery (converted from its MSFS model library), in metres as built
+airModels.t3 = gltfLoader.loadAsync('models/vidp_t3.glb?v=4').then((gltf) => {
+  const root = gltf.scene;
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    o.castShadow = o.receiveShadow = false;
+    for (const m of [].concat(o.material)) if ('roughness' in m) { m.roughness = Math.max(m.roughness ?? 1, 0.6); m.metalness = Math.min(m.metalness ?? 0, 0.3); }
+  });
+  root.rotation.y = T3P.rot;
+  root.position.set(T3P.tx, 0.03, T3P.tz);
+  root.userData.dynamic = true;
+  return root;
+}).catch((e) => { console.warn('model t3', e); return null; });
 
 /* ---------- Realism: photographed sky and light, PBR surfaces, real furniture ---------- */
 // Sky and image-based light: "Qwantani Sunset (Pure Sky)" from Poly Haven (CC0), a 1k HDR for light and reflections
@@ -2305,6 +2325,24 @@ function parkedGroup(model, placements) {
   return bakeGroup(g);
 }
 
+/** fly a mover with a real model: beacons, strobes, nav lights and a landing light scaled to its size */
+function swapMover(m, model, k) {
+  const g = new THREE.Group();
+  g.rotation.order = 'YZX';
+  model.userData.baked ??= bakeGroup(SkeletonUtils.clone(model)); // merged by material once, shared by every mover
+  g.add(model.userData.baked.clone());
+  blinker(glowPoints([[0, 6.2 * k, 0], [0, 1.6, 0]], 0xff3a20, 3, g), 1.2, 0, 0.15);
+  blinker(glowPoints([[-3.5 * k, 4.4, -17 * k], [-3.5 * k, 4.4, 17 * k]], 0xffffff, 4, g), 1.0, 0.3, 0.08);
+  glowPoints([[-3.5 * k, 4.4, -17 * k]], 0xff2a1a, 2, g);
+  glowPoints([[-3.5 * k, 4.4, 17 * k]], 0x2aff6a, 2, g);
+  glowPoints([[17.5 * k, 2.6, 0]], 0xfff1d6, 7, g); // landing light
+  g.visible = m.g.visible;
+  m.g.removeFromParent();
+  AIRSIDE.root.add(g);
+  m.g = g;
+  m.lift = 0;
+  m.real = model;
+}
 function upgradeAirside(md) {
   const air = AIRSIDE.root, P = AIRSIDE.placeholders;
   if (md.c182) {
@@ -2312,27 +2350,25 @@ function upgradeAirside(md) {
     P.trainers.forEach((t) => t.removeFromParent());
     air.add(parkedGroup(md.c182, spots));
   }
-  if (md.a320) {
-    const spots = P.jets.map((j) => [j.position.x, j.position.z, j.rotation.y]);
-    P.jets.forEach((j) => j.removeFromParent());
-    air.add(parkedGroup(md.a320, spots));
-    // the moving traffic flies the same loop with the real A320, plus beacons, strobes and a landing light
-    for (const m of AIRSIDE.movers) {
-      const g = new THREE.Group();
-      g.rotation.order = 'YZX';
-      g.add(SkeletonUtils.clone(md.a320));
-      blinker(glowPoints([[0, 6.2, 0], [0, 1.6, 0]], 0xff3a20, 3, g), 1.2, 0, 0.15);
-      blinker(glowPoints([[-3.5, 4.4, -17], [-3.5, 4.4, 17]], 0xffffff, 4, g), 1.0, 0.3, 0.08);
-      glowPoints([[-3.5, 4.4, -17]], 0xff2a1a, 2, g);
-      glowPoints([[-3.5, 4.4, 17]], 0x2aff6a, 2, g);
-      glowPoints([[17.5, 2.6, 0]], 0xfff1d6, 7, g); // landing light
-      g.visible = m.g.visible;
-      m.g.removeFromParent();
-      air.add(g);
-      m.g = g;
-      m.lift = 0;
+  for (const key of LIVERY_KEYS) {
+    if (!md[key]) continue;
+    const mine = P.jets.filter((j) => j.userData.livery === key && j.parent);
+    if (mine.length) {
+      const spots = mine.map((j) => [j.position.x, j.position.z, j.rotation.y]);
+      mine.forEach((j) => j.removeFromParent());
+      air.add(parkedGroup(md[key], spots));
     }
+    for (const m of AIRSIDE.movers) if (m.livery === key) swapMover(m, md[key], key.startsWith('b_') ? 1.67 : 1);
   }
+  if (md.a320) {
+    const house = P.jets.filter((j) => !j.userData.livery && j.parent);
+    const spots = house.map((j) => [j.position.x, j.position.z, j.rotation.y]);
+    house.forEach((j) => j.removeFromParent());
+    air.add(parkedGroup(md.a320, spots));
+    // movers still on a placeholder fly the house A320 until their airline's model arrives
+    for (const m of AIRSIDE.movers) if (!m.real) swapMover(m, md.a320, 1);
+  }
+  if (md.t3) { P.hall?.removeFromParent(); air.add(md.t3); }
   if (md.g650) air.add(parkedGroup(md.g650, [[96, -44, -Math.PI / 2 + 0.35]])); // the academy's business jet by its hangar
   if (md.tower) {
     P.tower.removeFromParent();
@@ -2533,7 +2569,7 @@ function buildAirside() {
     air.add(g);
     const sh = blob(0, 0, 40, 42);
     sh.userData.dynamic = true;
-    AIRSIDE.movers.push({ g, shadow: sh, lift: 4.2, offset: (i / liveries.length) * route.T, s: {} });
+    AIRSIDE.movers.push({ g, shadow: sh, lift: 4.2, offset: (i / liveries.length) * route.T, s: {}, livery: ['n_igo', 'b_vir', 'n_aic', 'n_vti', 'n_igo', 'b_baw'][i] });
   });
   // two of the academy's trainers flying circuits over the field
   for (let i = 0; i < 2; i++) {
@@ -2562,6 +2598,9 @@ function buildAirside() {
 /** Across the runway, after Delhi IGI's layout: a parallel taxiway, a T3-style terminal with jet bridges and gates,
     a second parallel runway lit for the evening, then the olive scrub and the hazy city edge. (Layout studied from
     satellite views as reference only; nothing is traced or copied from them.) */
+// where the VIDP T3 pier model sits: model metres turned about y, then moved (see buildFarField)
+const T3P = { rot: -2.1006, tx: 537.6, tz: -879.9 };
+function t3xz(x, z) { const c = Math.cos(T3P.rot), s = Math.sin(T3P.rot); return [x * c + z * s + T3P.tx, -x * s + z * c + T3P.tz]; }
 function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
   // parallel taxiway on the far side, with its centreline lights
   const FTW = RWY_Z - 80;
@@ -2576,58 +2615,56 @@ function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
   }
   glowPoints(twc, 0x52f08a, 1.6, air);
 
-  // terminal apron: pale concrete slabs, stand lead-in lines
-  const TZ = -560, TX0 = -760, TX1 = 160, TL = TX1 - TX0;
+  // Terminal 3's west pier from the VIDP scenery by AvinashC (used with the author's permission), turned so its
+  // straight face (stands 46-62) runs parallel to the runway. Stand positions are the scenery's own stand markers.
+  const W = [[588.6, 273.3], [616.4, 320.8], [643.4, 367], [669, 410.8], [698.8, 450.4], [722.9, 491.8], [747, 539.1], [772, 582.7], [795.1, 626]];
+  const D = [[622.2, 271.3], [647.8, 316.6], [674.3, 359.7], [701.6, 403.1], [726.8, 448.3], [752, 492.9], [776.3, 537.3], [801, 582.9], [828.4, 626.7]];
+  const ws = W.map(([x, z]) => t3xz(x, z)), ds = D.map(([x, z]) => t3xz(x, z));
+  const fx0 = Math.min(...ws.map((w) => w[0])) - 40, fx1 = Math.max(...ws.map((w) => w[0])) + 40, face = ws.reduce((a, w) => a + w[1], 0) / ws.length;
   const apron2 = apronMat.clone();
-  apron2.map = repeatOf(apronMat.map, TL / 24, 120 / 24);
+  apron2.map = repeatOf(apronMat.map, (fx1 - fx0) / 24, 90 / 24);
   CONCRETE_GROUND.push(apron2);
-  panel(TL, 120, apron2, (TX0 + TX1) / 2, 0.02, TZ + 62, 'up', air);
-  box(TL, 0.01, 0.3, yellow, (TX0 + TX1) / 2, 0.035, TZ + 100, air, { cast: false });
+  panel(fx1 - fx0, 90, apron2, (fx0 + fx1) / 2, 0.02, face + 45, 'up', air);
+  box(fx1 - fx0, 0.01, 0.3, yellow, (fx0 + fx1) / 2, 0.035, face + 82, air, { cast: false });
 
-  // the terminal: a long, low glass hall under a pale ribbed roof that overhangs the airside face
-  const term = new THREE.Group();
+  // a stand-in hall until the pier model arrives
+  const hall = new THREE.Group();
   const facadeTex = canvasTex(512, 256, (g, w, h) => {
     g.fillStyle = '#26303b'; g.fillRect(0, 0, w, h);
-    const lit = g.createLinearGradient(0, h * 0.35, 0, h);
-    lit.addColorStop(0, 'rgba(255,214,160,0.15)'); lit.addColorStop(1, 'rgba(255,214,160,0.55)');
-    g.fillStyle = lit; g.fillRect(0, h * 0.3, w, h * 0.7);
-    for (let i = 0; i < 24; i++) { g.fillStyle = `rgba(255,236,200,${0.25 + rand() * 0.5})`; g.fillRect(rand() * w, h * (0.45 + rand() * 0.4), 6 + rand() * 20, 4); }
+    g.fillStyle = 'rgba(255,214,160,0.35)'; g.fillRect(0, h * 0.3, w, h * 0.7);
     g.fillStyle = '#525a63';
     for (let x = 0; x < w; x += 32) g.fillRect(x, 0, 3, h);
-    g.fillRect(0, h * 0.42, w, 4);
   });
-  const facade = new THREE.MeshStandardMaterial({ map: repeatOf(facadeTex, TL / 24, 1), emissive: 0xffffff, emissiveMap: repeatOf(facadeTex, TL / 24, 1), emissiveIntensity: 0.55, roughness: 0.25, metalness: 0.3 });
-  box(TL, 18, 70, facade, (TX0 + TX1) / 2, 9, TZ - 35, term);
-  const roof = new THREE.MeshStandardMaterial({ color: 0xc8cbcf, roughness: 0.7, metalness: 0.45 });
-  roof.userData.rep = [TL / 3, 12];
-  RIBBED.push(roof);
-  box(TL + 16, 1.6, 86, roof, (TX0 + TX1) / 2, 18.8, TZ - 33, term);
-  box(TL + 16, 2.2, 0.6, new THREE.MeshStandardMaterial({ color: 0xd8dadc, roughness: 0.6, metalness: 0.4 }), (TX0 + TX1) / 2, 18.4, TZ + 10, term); // fascia
-  for (let x = TX0; x <= TX1; x += 24) cyl(0.5, 0.6, 18, M.paint, x, 9, TZ + 6, term, 10); // canopy columns
-  // gates: jet bridges out to five parked A320s
-  const bridge = new THREE.MeshStandardMaterial({ color: 0xb9bdc2, roughness: 0.6, metalness: 0.4 });
-  const GATES = [-680, -600, -520, -440, -360, -120, -40, 40];
-  GATES.forEach((gx, i) => {
-    const jz = TZ + 34;
-    box(0.3, 0.01, 40, yellow, gx, 0.035, jz + 8, air, { cast: false });
-    box(4, 6, 4, bridge, gx - 15, 3, TZ + 2, term); // the bridge's fixed link out of the terminal
-    if (i % 4 === 3) { jetBridge(gx - 15, TZ + 6, gx - 12, TZ + 12, 3.4, term); return; } // an empty stand, bridge parked
-    jetBridge(gx - 15, TZ + 6, gx - 2.4, jz - 18.8 + 4.6, 3.4, term);
+  const facade = new THREE.MeshStandardMaterial({ map: repeatOf(facadeTex, (fx1 - fx0) / 24, 1), roughness: 0.25, metalness: 0.3 });
+  box(fx1 - fx0, 12, 40, facade, (fx0 + fx1) / 2, 6, face - 20, hall);
+  box(fx1 - fx0 + 8, 1.2, 46, new THREE.MeshStandardMaterial({ color: 0xc8cbcf, roughness: 0.7, metalness: 0.45 }), (fx0 + fx1) / 2, 12.6, face - 20, hall);
+  hall.userData.dynamic = true;
+  air.add(hall);
+  AIRSIDE.placeholders.hall = hall;
+
+  // stands: apron-drive bridges from the pier's fixed links to the forward door, an A320 nose-in, a light turnaround
+  const term = new THREE.Group();
+  ds.forEach(([gx, nz], i) => {
+    const jz = nz + 18.8, wx = ws[i][0];
+    box(0.3, 0.01, 44, yellow, gx, 0.035, jz + 4, air, { cast: false });
+    if (i === 4) { jetBridge(wx - 6, face + 6, wx - 2, face + 14, 3.4, term); return; } // stand 54 empty, bridge parked
+    jetBridge(wx - 6, face + 6, gx - 2.4, nz + 4.6, 3.4, term);
     const G = gseMats();
-    for (const [o, px, pz, yaw] of [[beltLoader(), gx + 2.6, jz - 9.8, 0], [gpu(), gx + 4.5, jz - 17.3, Math.PI / 2], [cateringTruck(), gx + 7.4, jz + 11.8, 0]]) {
+    for (const [o, px, pz, yaw] of [[beltLoader(), gx + 2.6, nz + 9, 0], [gpu(), gx + 4.5, nz + 1.5, Math.PI / 2], [cateringTruck(), gx + 7.4, nz + 30.6, 0]]) {
       o.position.set(px, 0, pz); o.rotation.y = yaw; term.add(o);
     }
-    box(0.6, 0.25, 0.3, G.yellow, gx, 0.12, jz - 14, term);
+    box(0.6, 0.25, 0.3, G.yellow, gx, 0.12, nz + 5, term);
     const jet = bakeGroup(airliner({ tail: M.paintNavy, gear: true }));
     jet.scale.setScalar(40);
     jet.position.set(gx, 4.2, jz);
-    jet.rotation.y = Math.PI / 2; // nose in, toward the terminal
+    jet.rotation.y = Math.PI / 2; // nose in, toward the pier
+    jet.userData.livery = ['n_igo', 'n_aic', 'b_vir', 'n_igo', null, 'n_vti', 'n_igo', 'b_baw', 'n_aic'][i];
+    if (jet.userData.livery?.startsWith('b_')) jet.position.z = nz + 31.4; // a 787 is 63 m long
     jet.userData.dynamic = true; // a placeholder until the A320 model arrives
     air.add(jet);
     AIRSIDE.placeholders.jets.push(jet);
   });
   air.add(term);
-  glowPoints(Array.from({ length: 20 }, (_, i) => [TX0 + 20 + i * (TL - 40) / 19, 17.2, TZ + 9]), 0xffe2b5, 4, air); // canopy downlights
 
   // the second parallel runway, far out: only its lights read at this distance, which is how it looks at dusk
   const R2 = RWY_Z - 700, R2L = 3200;
@@ -2646,7 +2683,6 @@ function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
   scatter(520, -2600, 2200, -1300, -1180);
   scatter(140, -2600, -1900, -1180, -40);
   scatter(140, 1500, 2200, -1180, -40);
-  scatter(90, TX0 - 60, TX1 + 60, TZ - 140, TZ - 90);
   const crownMat = new THREE.MeshStandardMaterial({ color: 0x4f5634, roughness: 1, flatShading: true });
   const trees = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), crownMat, crowns.length);
   const dm = new THREE.Object3D();

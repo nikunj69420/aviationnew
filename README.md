@@ -17,6 +17,8 @@ and the tower are glTF models in `models/`.
 - Jet Engine (mentor's desk) by Pilot (CC BY 4.0): https://sketchfab.com/playerhack
 - Residential Furniture by ATD-London (CC BY 4.0), pieces cut from it: https://sketchfab.com/ATD-London
 - Bookshelf [CC0] by Crew Froebel (CC BY 4.0): https://sketchfab.com/crufro
+- Delhi T3 pier: from "VIDP Indira Gandhi International Airport" (MSFS scenery) by AvinashC, converted to glTF and used with the author's permission: https://flightsim.to/addon/7681/vidp-indira-gandhi-international-airport
+- Airline A320neo (FAIB, CFM) and Boeing 787-9 (AIG, Rolls-Royce) with their liveries: Alpha India Group AI aircraft, converted from MSFS and used with permission
 - Sky, HDRI and surface textures: Poly Haven (CC0), https://polyhaven.com
 
 ## Engine simulator
