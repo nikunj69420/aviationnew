@@ -1485,6 +1485,7 @@ function buildRooms() {
   const { z0, z1, h } = ROOM;
   const D = z0 - z1, cz = (z0 + z1) / 2;
   const carpet = new THREE.MeshStandardMaterial({ map: repeatOf(R.carpet, 8, 8), roughness: 1 });
+  CARPET.push(carpet);
   const planks = new THREE.MeshStandardMaterial({ map: repeatOf(R.planks, 2.2, 2.2), roughness: 0.85 });
   const roomWall = new THREE.MeshStandardMaterial({ color: 0xe9e6df, roughness: 0.92 });
 
@@ -1609,7 +1610,7 @@ function studentChair(x, z) {
 // east-west 300 m out; four airliners fly one loop (land, taxi, line up, take off) at staggered times.
 const AIRSIDE = { root: null, movers: [], blinkers: [], vehicles: [], backLeaves: [], rabbit: null, route: null, active: false, placeholders: { trainers: [], jets: [], tower: null } };
 const RWY_Z = -322, TWY_Z = -135, RWY_THR = 760, RWY_END = -1700;
-let GLOW = null;
+let GLOW = null, RUNWAY_MAT = null;
 
 function glowPoints(positions, color, size, parent) {
   const geo = new THREE.BufferGeometry();
@@ -2007,11 +2008,18 @@ function dressScene() {
   for (const m of PAVED) dress(m, 'rectangular_paving', { keepRepeatOf: m.map, k: 1.2, color: 0xffffff, rough: 1 });
   for (const m of LAWN) dress(m, 'leafy_grass', { keepRepeatOf: m.map, k: 1.3, color: 0xb9c7a6, rough: 1 });
   for (const m of ASPHALT) dress(m, 'asphalt_02', { keepRepeatOf: m.map, k: 1.5, rough: 1 });
-  for (const m of CONCRETE_GROUND) dress(m, 'concrete_floor_worn_001', { keepRepeatOf: m.map, k: 5, color: 0xd6d3cc, rough: 1 });
+  // the airfield after Delhi IGI: dusty olive infield, pale concrete apron slabs, rubber-marked runway asphalt
+  for (const m of CONCRETE_GROUND) dress(m, 'concrete_pavement', { keepRepeatOf: m.map, k: 0.75, color: 0xeae4d8, rough: 1 });
+  for (const m of AIRFIELD) dress(m, 'withered_grass', { keepRepeatOf: m.map, k: 1, color: 0xc9bda0, rough: 1 });
+  for (const m of RUNWAY) dress(m, 'aerial_asphalt_01', { keepRepeatOf: m.map, k: 1, color: 0xa29f99, rough: 1 });
+  for (const m of RIBBED) dress(m, 'box_profile_metal_sheet', { repeat: m.userData.rep, diff: false, normal: 1.2, rough: 0.75 });
+  // inside: acoustic ceiling texture, real carpet pile in room A
+  dress(M.ceiling, 'ceiling_interior', { repeat: [5, 5], diff: false, normal: 0.35, rough: 1 });
+  for (const m of CARPET) dress(m, 'dirty_carpet', { keepRepeatOf: m.map, k: 1, diff: false, normal: 0.8, rough: 1 });
   dress(M.concrete, 'brushed_concrete', { repeat: [1, 1], color: 0xcfcac2, rough: 1 });
 }
 // filled while the scene is built: materials that later take a texture set
-const PAVED = [], LAWN = [], ASPHALT = [], CONCRETE_GROUND = [];
+const PAVED = [], LAWN = [], ASPHALT = [], CONCRETE_GROUND = [], AIRFIELD = [], RUNWAY = [], RIBBED = [], CARPET = [];
 
 // Real furniture: pieces cut from "Residential Furniture" by ATD-London (CC BY 4.0) into models/furniture.glb, and
 // "Bookshelf [CC0]" by Crew Froebel (CC BY 4.0) as models/bookshelf.glb. Loaded before the scene is built.
@@ -2214,8 +2222,8 @@ function buildAirside() {
   const tarmacAt = (w, d) => { const m = tarmac.clone(); m.map = repeatOf(T.asphalt, w / 12, d / 12); ASPHALT.push(m); return m; };
   const yellow = new THREE.MeshStandardMaterial({ color: 0xd9b23a, roughness: 0.8 });
   const white = new THREE.MeshStandardMaterial({ color: 0xe9e9e4, roughness: 0.8 });
-  const grass = new THREE.MeshStandardMaterial({ map: repeatOf(T.grass, 900, 900), roughness: 1 });
-  LAWN.push(grass);
+  const grass = new THREE.MeshStandardMaterial({ map: repeatOf(T.grass, 750, 750), color: 0xb8ab84, roughness: 1 });
+  AIRFIELD.push(grass);
 
   // ground layers: grass everywhere, apron, service road, taxiway, connectors, runway
   panel(6000, 6000, grass, 0, -0.06, -900, 'up', air);
@@ -2227,15 +2235,28 @@ function buildAirside() {
   const route = buildRoute();
   AIRSIDE.route = route;
   for (const x of route.conn) twy(x - 11.5, x + 11.5, TWY_Z - 11, RWY_Z + 22);
-  panel(RWY_THR - RWY_END + 60, 45, tarmacAt(RWY_THR - RWY_END + 60, 45), (RWY_THR + RWY_END) / 2 + 30, 0.035, RWY_Z, 'up', air).material.color.set(0x7d7d7d);
-  // runway markings
-  for (let x = RWY_THR - 90; x > RWY_END + 60; x -= 50) box(30, 0.01, 0.9, white, x, 0.05, RWY_Z, air, { cast: false });
+  // runway 28/10 (the heading Delhi's 10/28 runs on): 45 m of grooved asphalt between 7.5 m paved shoulders
+  const RL = RWY_THR - RWY_END + 60, RX = (RWY_THR + RWY_END) / 2 + 30;
+  const shoulder = tarmacAt(RL, 60); shoulder.color.set(0xb3aea4);
+  panel(RL, 60, shoulder, RX, 0.03, RWY_Z, 'up', air);
+  RUNWAY_MAT = new THREE.MeshStandardMaterial({ map: repeatOf(T.asphalt, RL / 30, 45 / 30), color: 0x7d7d7d, roughness: 0.9 });
+  RUNWAY.push(RUNWAY_MAT);
+  panel(RL, 45, RUNWAY_MAT, RX, 0.035, RWY_Z, 'up', air);
+  // markings: centreline, side stripes, threshold piano keys, designators, aiming point and touchdown zone, both ends
+  for (let x = RWY_THR - 110; x > RWY_END + 110; x -= 50) box(30, 0.01, 0.9, white, x, 0.05, RWY_Z, air, { cast: false });
   for (const s of [-1, 1]) box(RWY_THR - RWY_END, 0.01, 0.9, white, (RWY_THR + RWY_END) / 2, 0.05, RWY_Z + s * 21.5, air, { cast: false });
-  for (const s of [-1, 1]) for (let i = 0; i < 6; i++) box(30, 0.01, 1.8, white, RWY_THR - 25, 0.05, RWY_Z + s * (4 + i * 3), air, { cast: false });
-  for (const dx of [300, 450, 600]) for (const s of [-1, 1]) box(22, 0.01, 3, white, RWY_THR - dx, 0.05, RWY_Z + s * 9, air, { cast: false });
-  const num = canvasTex(256, 256, (g, w, h) => { g.fillStyle = '#e9e9e4'; g.font = FONT(700, 200); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('27', w / 2, h / 2 + 10); });
-  const n27 = panel(20, 20, new THREE.MeshStandardMaterial({ map: num, transparent: true, roughness: 0.8 }), RWY_THR - 75, 0.055, RWY_Z, 'up', air, { cast: false, receive: false });
-  n27.rotation.z = Math.PI / 2;
+  const designator = (txt, x, rot) => {
+    const tex = canvasTex(256, 256, (g, w, h) => { g.fillStyle = '#e9e9e4'; g.font = FONT(700, 200); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, w / 2, h / 2 + 10); });
+    panel(22, 22, new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.8 }), x, 0.055, RWY_Z, 'up', air, { cast: false, receive: false }).rotation.z = rot;
+  };
+  for (const [x0, dir, txt, rot] of [[RWY_THR, -1, '28', Math.PI / 2], [RWY_END, 1, '10', -Math.PI / 2]]) {
+    for (const s of [-1, 1]) for (let i = 0; i < 6; i++) box(30, 0.01, 1.8, white, x0 + dir * 25, 0.05, RWY_Z + s * (4 + i * 3), air, { cast: false });
+    designator(txt, x0 + dir * 75, rot);
+    for (const s of [-1, 1]) box(45, 0.01, 9, white, x0 + dir * 400, 0.05, RWY_Z + s * 11, air, { cast: false }); // aiming point
+    for (const [dx, n] of [[150, 3], [300, 2], [550, 2], [700, 1], [850, 1]]) for (const s of [-1, 1]) for (let j = 0; j < n; j++) {
+      box(22, 0.01, 1.8, white, x0 + dir * dx, 0.05, RWY_Z + s * (5 + j * 2.7), air, { cast: false });
+    }
+  }
   // taxiway and apron paint
   box(1460, 0.01, 0.3, yellow, 0, 0.04, TWY_Z, air, { cast: false });
   box(520, 0.01, 0.3, yellow, 0, 0.035, -104, air, { cast: false });
@@ -2285,7 +2306,10 @@ function buildAirside() {
 
   // academy hangar with the logo, to the east
   const hx = 120, hz = -75;
-  box(64, 16, 36, M.cladding.clone(), hx, 8, hz, air);
+  const hangarSkin = new THREE.MeshStandardMaterial({ color: 0x2a3760, roughness: 0.75, metalness: 0.35 });
+  hangarSkin.userData.rep = [26, 7];
+  RIBBED.push(hangarSkin);
+  box(64, 16, 36, hangarSkin, hx, 8, hz, air);
   box(66, 1.2, 38, M.claddingDeep, hx, 16.6, hz, air);
   box(52, 13, 0.4, new THREE.MeshStandardMaterial({ color: 0x5d636c, roughness: 0.8 }), hx, 6.5, hz + 18.1, air);
   for (let i = 1; i < 6; i++) box(0.2, 13, 0.5, M.mullion, hx - 26 + i * (52 / 6), 6.5, hz + 18.2, air);
@@ -2375,8 +2399,119 @@ function buildAirside() {
   const train = tugTrain().map((p) => { const b = bakeGroup(p); b.userData.dynamic = true; air.add(b); return b; });
   AIRSIDE.vehicles.push({ train, cx: -70, cz: -59, rx: 48, rz: 4.5, speed: 5 });
 
+  buildFarField(air, { white, yellow, tarmacAt, apronMat });
   buildDeck(air);
   air.traverse((o) => { o.castShadow = false; });
+}
+
+/** Across the runway, after Delhi IGI's layout: a parallel taxiway, a T3-style terminal with jet bridges and gates,
+    a second parallel runway lit for the evening, then the olive scrub and the hazy city edge. (Layout studied from
+    satellite views as reference only; nothing is traced or copied from them.) */
+function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
+  // parallel taxiway on the far side, with its centreline lights
+  const FTW = RWY_Z - 80;
+  panel(2400, 23, tarmacAt(2400, 23), -350, 0.025, FTW, 'up', air);
+  box(2400, 0.01, 0.3, yellow, -350, 0.04, FTW, air, { cast: false });
+  const twc = [];
+  for (let x = -1500; x <= 800; x += 30) twc.push([x, 0.3, FTW]);
+  for (const x of [-600, -150, 300]) {
+    panel(23, 50, tarmacAt(23, 50), x, 0.024, (RWY_Z - 30 + FTW) / 2 - 6, 'up', air);
+    box(0.3, 0.01, 52, yellow, x, 0.04, (RWY_Z - 30 + FTW) / 2 - 6, air, { cast: false });
+    for (let z = FTW + 8; z < RWY_Z - 30; z += 12) twc.push([x, 0.3, z]);
+  }
+  glowPoints(twc, 0x52f08a, 1.6, air);
+
+  // terminal apron: pale concrete slabs, stand lead-in lines
+  const TZ = -560, TX0 = -760, TX1 = 160, TL = TX1 - TX0;
+  const apron2 = apronMat.clone();
+  apron2.map = repeatOf(apronMat.map, TL / 24, 120 / 24);
+  CONCRETE_GROUND.push(apron2);
+  panel(TL, 120, apron2, (TX0 + TX1) / 2, 0.02, TZ + 62, 'up', air);
+  box(TL, 0.01, 0.3, yellow, (TX0 + TX1) / 2, 0.035, TZ + 100, air, { cast: false });
+
+  // the terminal: a long, low glass hall under a pale ribbed roof that overhangs the airside face
+  const term = new THREE.Group();
+  const facadeTex = canvasTex(512, 256, (g, w, h) => {
+    g.fillStyle = '#26303b'; g.fillRect(0, 0, w, h);
+    const lit = g.createLinearGradient(0, h * 0.35, 0, h);
+    lit.addColorStop(0, 'rgba(255,214,160,0.15)'); lit.addColorStop(1, 'rgba(255,214,160,0.55)');
+    g.fillStyle = lit; g.fillRect(0, h * 0.3, w, h * 0.7);
+    for (let i = 0; i < 24; i++) { g.fillStyle = `rgba(255,236,200,${0.25 + rand() * 0.5})`; g.fillRect(rand() * w, h * (0.45 + rand() * 0.4), 6 + rand() * 20, 4); }
+    g.fillStyle = '#525a63';
+    for (let x = 0; x < w; x += 32) g.fillRect(x, 0, 3, h);
+    g.fillRect(0, h * 0.42, w, 4);
+  });
+  const facade = new THREE.MeshStandardMaterial({ map: repeatOf(facadeTex, TL / 24, 1), emissive: 0xffffff, emissiveMap: repeatOf(facadeTex, TL / 24, 1), emissiveIntensity: 0.55, roughness: 0.25, metalness: 0.3 });
+  box(TL, 18, 70, facade, (TX0 + TX1) / 2, 9, TZ - 35, term);
+  const roof = new THREE.MeshStandardMaterial({ color: 0xc8cbcf, roughness: 0.7, metalness: 0.45 });
+  roof.userData.rep = [TL / 3, 12];
+  RIBBED.push(roof);
+  box(TL + 16, 1.6, 86, roof, (TX0 + TX1) / 2, 18.8, TZ - 33, term);
+  box(TL + 16, 2.2, 0.6, new THREE.MeshStandardMaterial({ color: 0xd8dadc, roughness: 0.6, metalness: 0.4 }), (TX0 + TX1) / 2, 18.4, TZ + 10, term); // fascia
+  for (let x = TX0; x <= TX1; x += 24) cyl(0.5, 0.6, 18, M.paint, x, 9, TZ + 6, term, 10); // canopy columns
+  // gates: jet bridges out to five parked A320s
+  const bridge = new THREE.MeshStandardMaterial({ color: 0xb9bdc2, roughness: 0.6, metalness: 0.4 });
+  const GATES = [-680, -600, -520, -440, -360, -120, -40, 40];
+  GATES.forEach((gx, i) => {
+    const jz = TZ + 34;
+    box(3.2, 3.2, 14, bridge, gx - 4, 4.8, TZ + 7, term);
+    cyl(2.4, 2.4, 3.6, bridge, gx - 4, 4.8, TZ + 14.5, term, 14);
+    for (const dz of [10, 14.5]) cyl(0.25, 0.25, 3.2, M.metalDark, gx - 4, 1.6, TZ + dz, term, 8);
+    box(0.3, 0.01, 40, yellow, gx, 0.035, jz + 8, air, { cast: false });
+    if (i % 4 === 3) return; // an empty stand here and there
+    const jet = bakeGroup(airliner({ tail: M.paintNavy, gear: true }));
+    jet.scale.setScalar(40);
+    jet.position.set(gx, 4.2, jz);
+    jet.rotation.y = Math.PI / 2; // nose in, toward the terminal
+    jet.userData.dynamic = true; // a placeholder until the A320 model arrives
+    air.add(jet);
+    AIRSIDE.placeholders.jets.push(jet);
+  });
+  air.add(term);
+  glowPoints(Array.from({ length: 20 }, (_, i) => [TX0 + 20 + i * (TL - 40) / 19, 17.2, TZ + 9]), 0xffe2b5, 4, air); // canopy downlights
+
+  // the second parallel runway, far out: only its lights read at this distance, which is how it looks at dusk
+  const R2 = RWY_Z - 700, R2L = 3200;
+  panel(R2L, 45, RUNWAY_MAT, -400, 0.035, R2, 'up', air);
+  const e2 = [], c2 = [];
+  for (let x = -2000; x <= 1200; x += 60) for (const s of [-1, 1]) e2.push([x, 0.5, R2 + s * 23.5]);
+  for (let x = -1980; x <= 1180; x += 30) c2.push([x, 0.3, R2]);
+  glowPoints(e2, 0xfff1d6, 2.8, air);
+  glowPoints(c2, 0xfff6e6, 1.6, air);
+  glowPoints(Array.from({ length: 15 }, (_, i) => [1202, 0.4, R2 - 21 + i * 3]), 0x5dff9a, 2.6, air);
+
+  // olive scrub (kikar and neem) along the boundary, and the city's edge in the haze beyond
+  const rnd = mulberry32(28);
+  const crowns = [];
+  const scatter = (n, x0, x1, z0, z1) => { for (let i = 0; i < n; i++) crowns.push([x0 + rnd() * (x1 - x0), z0 + rnd() * (z1 - z0)]); };
+  scatter(520, -2600, 2200, -1300, -1180);
+  scatter(140, -2600, -1900, -1180, -40);
+  scatter(140, 1500, 2200, -1180, -40);
+  scatter(90, TX0 - 60, TX1 + 60, TZ - 140, TZ - 90);
+  const crownMat = new THREE.MeshStandardMaterial({ color: 0x4f5634, roughness: 1, flatShading: true });
+  const trees = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), crownMat, crowns.length);
+  const dm = new THREE.Object3D();
+  crowns.forEach(([x, z], i) => {
+    const r = 4 + rnd() * 5;
+    dm.position.set(x, r * 0.75 + 1.5, z);
+    dm.scale.set(r * (1 + rnd() * 0.4), r * (0.55 + rnd() * 0.25), r * (1 + rnd() * 0.4));
+    dm.rotation.y = rnd() * 6.28;
+    dm.updateMatrix();
+    trees.setMatrixAt(i, dm.matrix);
+  });
+  trees.userData.dynamic = true;
+  air.add(trees);
+  const blocks = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0x8d8f96, roughness: 0.9 }), 70);
+  for (let i = 0; i < 70; i++) {
+    const h = 18 + rnd() * rnd() * 70, x = -2600 + rnd() * 4800;
+    dm.position.set(x, h / 2, -1450 - rnd() * 250);
+    dm.scale.set(20 + rnd() * 40, h, 20 + rnd() * 30);
+    dm.rotation.y = (rnd() - 0.5) * 0.3;
+    dm.updateMatrix();
+    blocks.setMatrixAt(i, dm.matrix);
+  }
+  blocks.userData.dynamic = true;
+  air.add(blocks);
 }
 
 /** Spotters' deck behind the building: a steel stair up to a glass-railed platform 8 m up. */
