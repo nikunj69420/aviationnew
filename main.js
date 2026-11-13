@@ -3257,8 +3257,6 @@ async function init() {
   updateAirside(performance.now()); // place every vehicle on its route before the first frame
   for (const [k, pr] of Object.entries(airModels)) pr.then((m) => m && upgradeAirside({ [k]: m }));
   loadVegetation();
-  loadNeighbours();
-  loadStreet();
   loadIGI();
   loadDeskEngine();
   uDoor = computeDoorU();
@@ -3269,6 +3267,7 @@ async function init() {
   });
 
   buildStreetStatic();
+  buildConnaught();
   mark('built');
   mergeStatic();
   mark('merged');
@@ -3417,7 +3416,7 @@ async function loadVegetation() {
   const land = (x, z) => !((Math.abs(x) < 15.8 && z > -0.6 && z < 12.6) || (Math.abs(x) < 2.8 && z < 32.6) || (z > 31.4 && z < 41.6)
     || (Math.abs(x) < 15.5 && z > -24 && z < 1) || (z < -23.2)
     || (z > 29.3 && z < 44.2) || (Math.abs(x) < 17.6 && z > 29 && z < 59.8)); // pavements and the apron across the road
-  const front = [-75, 75, -23, 95];
+  const front = [-27.5, 27.5, -23, 29.2]; // the campus court between the wings
   plantInstances(blades, clusterPoints(2600, front, land, rng, { spread: 3, per: 14 }), scene, rng, [0.7, 1.2]);
   plantInstances(cloves, clusterPoints(1400, front, land, rng, { spread: 2.5, per: 10 }), scene, rng, [0.8, 1.3]);
   plantInstances(dand, clusterPoints(160, front, land, rng, { spread: 3, per: 6 }), scene, rng, [0.7, 1.1]);
@@ -3443,8 +3442,7 @@ async function loadVegetation() {
     const all = new THREE.Box3().setFromObject(maple), c = all.getCenter(new THREE.Vector3());
     const base = 9 / (all.max.y - all.min.y); // the tree arrives in centimetres: about 9 m tall here
     const spots = [...CODE_TREES.map((t) => [t.position.x, t.position.z]),
-      [-26, 26], [26, 27], [-40, 28], [40, 27], [-56, 26], [56, 28], [-30, 47], [30, 46], [-48, 48], [48, 47],
-      [-24, -8], [24, -12], [-34, -16], [36, -6]];
+      [-22, 25], [22, 25], [-23, -8], [23, -12]];
     CODE_TREES.forEach((t) => t.removeFromParent());
     const tr = mulberry32(5);
     const mats = spots.map(([x, z]) => {
@@ -3548,10 +3546,10 @@ function cityFacade(base, frame, seed) {
 function buildCity(air) {
   const rnd = mulberry32(404);
   const styles = [
-    { tex: cityFacade('#b9ab92', '#8f846f', 1), color: 0xffffff }, // sandstone
-    { tex: cityFacade('#5d6f82', '#3d4a58', 2), color: 0xffffff }, // glass offices
-    { tex: cityFacade('#d9d2c4', '#a8a091', 3), color: 0xffffff }, // white plaster
-    { tex: cityFacade('#9a6d55', '#7a5443', 4), color: 0xffffff }, // brick
+    { tex: cityFacade('#e6dfd0', '#b9b1a0', 1), color: 0xffffff }, // lime-washed white
+    { tex: cityFacade('#d8cbb2', '#a89a80', 2), color: 0xffffff }, // Dholpur sandstone
+    { tex: cityFacade('#ded6c6', '#aaa292', 3), color: 0xffffff }, // cream plaster
+    { tex: cityFacade('#c9b9a0', '#9a8b72', 4), color: 0xffffff }, // buff stone
   ];
   const lots = styles.map(() => []);
   const free = (x, z) => {
@@ -3563,13 +3561,11 @@ function buildCity(air) {
   };
   const add = (x, z, w, d, h) => { if (free(x, z)) lots[(rnd() * styles.length) | 0].push([x, z, w, d, h]); };
   // near belt: streets of 6-14 storey blocks round the campus, tallest further out
-  for (let x = -330; x <= 330; x += 34) for (let z = 82; z <= 380; z += 32) add(x + (rnd() - 0.5) * 6, z + (rnd() - 0.5) * 6, 18 + rnd() * 10, 16 + rnd() * 10, 14 + rnd() * 18 + (z - 82) * 0.06);
-  for (const sx of [-1, 1]) for (let x = 92; x <= 330; x += 34) for (let z = -18; z <= 80; z += 30) add(sx * (x + rnd() * 6), z, 18 + rnd() * 10, 16 + rnd() * 8, 12 + rnd() * 16);
   // far belt: round the whole field, 600 m to 1.4 km out, taller with distance
   for (let i = 0; i < 520; i++) {
     const a = rnd() * Math.PI * 2, r = 700 + rnd() * 700;
     const x = -350 + Math.cos(a) * r * 1.6, z = -500 + Math.sin(a) * r;
-    add(x, z, 24 + rnd() * 30, 22 + rnd() * 30, 18 + rnd() * rnd() * 70);
+    add(x, z, 26 + rnd() * 34, 24 + rnd() * 30, 12 + rnd() * rnd() * 30); // low-rise, as central Delhi is
   }
   const geo = new THREE.BoxGeometry(1, 1, 1);
   geo.translate(0, 0.5, 0);
@@ -3604,6 +3600,152 @@ function buildCity(air) {
   });
 }
 
+/* ---------- The surroundings, after Connaught Place, New Delhi ---------- */
+// White two-storey Georgian blocks: a ground-floor colonnade of round Tuscan columns on a low plinth, a shaded
+// verandah with shopfronts behind, a railed upper gallery on slimmer columns, deep cornices and a parapet. Built in
+// code and merged with the static scene. Shop names are invented.
+let CPM = null;
+const CP_GLOW = [];
+function cpMats() {
+  if (CPM) return CPM;
+  const std = (o) => new THREE.MeshStandardMaterial(o);
+  const white = std({ color: 0xf0ebdf, roughness: 0.9 }), trim = std({ color: 0xe3dccb, roughness: 0.9 }), stone = std({ color: 0xb4aea1, roughness: 0.95 });
+  for (const m of [white, trim]) dress(m, 'painted_plaster_wall', { repeat: [2, 2], diff: false, normal: 0.45, rough: 1 });
+  const floor = std({ roughness: 0.6, map: canvasTex(256, 256, (g, w, h) => { // chequered verandah tiles
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { g.fillStyle = (i + j) & 1 ? '#cfc8b8' : '#8f8a80'; g.fillRect(i * 64, j * 64, 64, 64); }
+  }) });
+  floor.map.wrapS = floor.map.wrapT = THREE.RepeatWrapping;
+  const rail = std({ roughness: 0.9, map: canvasTex(256, 128, (g, w, h) => { // balustrade: turned balusters between rails
+    g.fillStyle = '#ece6d8'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#5f5a50';
+    for (let x = 6; x < w; x += 22) { g.beginPath(); g.ellipse(x + 11, h / 2, 5, h * 0.32, 0, 0, Math.PI * 2); g.fill(); }
+    g.fillStyle = '#ece6d8'; g.fillRect(0, 0, w, 16); g.fillRect(0, h - 18, w, 18);
+  }) });
+  rail.map.wrapS = THREE.RepeatWrapping;
+  const names = [['SHARMA SWEETS', '#7a1f1f', '#f3e3b0'], ['KHADI BHANDAR', '#1f4a3a', '#f1ead6'], ['THE BOOK DEPOT', '#1c2f55', '#f2efe6'], ['CHAI & CO.', '#3a2a1c', '#e9c98a'],
+    ['RAJ TAILORS', '#4a1c3a', '#f0e6ee'], ['CITY OPTICALS', '#12404a', '#e6f2f2'], ['SILK EMPORIUM', '#6a4a12', '#f6ecd0'], ['STATIONERS', '#2a2a2a', '#eeeeee']];
+  const rnd = mulberry32(88);
+  const shops = names.map(([name, bg, fg]) => {
+    const tex = canvasTex(512, 512, (g, w, h) => {
+      g.fillStyle = '#e9e3d5'; g.fillRect(0, 0, w, h);            // plaster surround
+      g.fillStyle = bg; g.fillRect(26, 30, w - 52, 92);            // sign board
+      g.strokeStyle = fg; g.lineWidth = 3; g.strokeRect(34, 38, w - 68, 76);
+      g.fillStyle = fg; g.font = FONT(700, 44, 'Fraunces, Georgia, serif'); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(name, w / 2, 78);
+      const lit = g.createLinearGradient(0, 150, 0, h);             // shop window, lit from inside
+      lit.addColorStop(0, '#f6d49a'); lit.addColorStop(1, '#b98a4e');
+      g.fillStyle = lit; g.fillRect(40, 150, w - 80, h - 150);
+      for (let i = 0; i < 26; i++) { g.fillStyle = `hsla(${(rnd() * 360) | 0},45%,${30 + rnd() * 30}%,0.85)`; g.fillRect(52 + rnd() * (w - 150), 190 + ((rnd() * 4) | 0) * 70, 22 + rnd() * 40, 48); } // goods on shelves
+      g.fillStyle = 'rgba(60,40,20,0.9)';
+      for (let y = 240; y < h; y += 70) g.fillRect(40, y, w - 80, 6);
+      g.fillStyle = '#3b2a1c'; g.fillRect(40, 146, w - 80, 8); g.fillRect(w / 2 - 4, 150, 8, h); g.fillRect(36, 150, 8, h); g.fillRect(w - 44, 150, 8, h); // teak frame
+    });
+    return std({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.5, roughness: 0.6 });
+  });
+  const wins = [0, 1].map((k) => {
+    const tex = canvasTex(256, 320, (g, w, h) => {
+      g.fillStyle = '#ece6d8'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#d9d2c2'; g.fillRect(52, 26, w - 104, h - 52);                       // moulded surround
+      g.fillStyle = k ? '#f1cf96' : '#27313c'; g.fillRect(64, 38, w - 128, h - 76);        // lit, or dark with the evening in it
+      g.fillStyle = '#4a3523'; g.fillRect(w / 2 - 3, 38, 6, h - 76); g.fillRect(64, h * 0.42, w - 128, 5); g.fillRect(64, 38, w - 128, 5);
+      if (!k) { g.fillStyle = '#3f5a48'; g.fillRect(64, 38, 30, h - 76); g.fillRect(w - 94, 38, 30, h - 76); } // green shutters folded back
+    });
+    return std({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: k ? 0.45 : 0.04, roughness: 0.8 });
+  });
+  CPM = { white, trim, stone, floor, rail, shops, wins, ceil: std({ color: 0xd9d3c5, roughness: 1 }), iron: std({ color: 0x1b1d20, roughness: 0.6, metalness: 0.4 }) };
+  return CPM;
+}
+/** one block: L metres of colonnade along local +x, its front on local z = 0 facing +z, the building behind */
+function cpBlock(x, z, yaw, L, depth = 14) {
+  const C = cpMats(), g = new THREE.Group();
+  g.position.set(x, 0, z); g.rotation.y = yaw;
+  scene.add(g);
+  const n = Math.max(2, Math.round(L / 3.4)), bw = L / n, V = 3.3; // bays, bay width, verandah depth
+  const y0 = 0.3, yE = 4.5, yF = 5.45, yT = 8.6, yR = 9.45;
+  // plinth and verandah floor, the building, floors and roof over the galleries
+  box(L + 0.5, y0, V + 0.6, C.stone, L / 2, y0 / 2, -V / 2 + 0.1, g);
+  const fl = panel(L, V, C.floor.clone(), L / 2, y0 + 0.006, -V / 2, 'up', g); fl.material.map = repeatOf(C.floor.map, L / 2.4, V / 2.4);
+  box(L, yR - y0, depth - V, C.white, L / 2, (yR + y0) / 2, -(depth + V) / 2, g);
+  box(L, 0.25, V, C.ceil, L / 2, yF - 0.3, -V / 2, g);
+  box(L, 0.22, V + 0.2, C.ceil, L / 2, yR - 0.2, -V / 2, g);
+  // entablatures and cornices, lower and upper
+  for (const [yb, h, proj] of [[yE, 0.8, 0.42], [yT, 0.72, 0.5]]) {
+    box(L + 0.3, h, 0.7, C.white, L / 2, yb + h / 2, -0.12, g);
+    box(L + 0.3 + proj * 2, 0.15, 0.7 + proj * 2, C.trim, L / 2, yb + h + 0.075, -0.12, g);
+    box(L + 0.3, 0.1, 0.78, C.trim, L / 2, yb + 0.05, -0.12, g);
+  }
+  // parapet with balustrade panels
+  const par = box(L + 0.3, 0.85, 0.22, C.rail.clone(), L / 2, yR + 0.55, -0.3, g); par.material.map = repeatOf(C.rail.map, L / 2.6, 1);
+  box(L + 0.4, 0.1, 0.34, C.trim, L / 2, yR + 1.02, -0.3, g);
+  for (let i = 0; i <= n; i++) {
+    const cx = i * bw, end = i === 0 || i === n;
+    // ground-floor column: square piers at the ends, round Tuscan columns between
+    if (end) box(0.8, yE - y0, 0.8, C.white, cx, (yE + y0) / 2, 0, g);
+    else {
+      box(0.78, 0.16, 0.78, C.trim, cx, y0 + 0.08, 0, g);
+      cyl(0.27, 0.31, yE - y0 - 0.5, C.white, cx, y0 + 0.16 + (yE - y0 - 0.5) / 2, 0, g, 16);
+      cyl(0.36, 0.28, 0.14, C.trim, cx, yE - 0.27, 0, g, 16);
+      box(0.76, 0.14, 0.76, C.trim, cx, yE - 0.1, 0, g);
+    }
+    // upper gallery column
+    if (end) box(0.6, yT - yF, 0.6, C.white, cx, (yT + yF) / 2, 0, g);
+    else {
+      box(0.52, 0.12, 0.52, C.trim, cx, yF + 0.06, 0, g);
+      cyl(0.19, 0.22, yT - yF - 0.36, C.white, cx, yF + 0.12 + (yT - yF - 0.36) / 2, 0, g, 14);
+      box(0.52, 0.12, 0.52, C.trim, cx, yT - 0.06, 0, g);
+    }
+    if (i === n) break;
+    const mx = cx + bw / 2;
+    // upper railing, shopfront and upper window for this bay, a pilaster between bays
+    box(bw - 0.5, 0.82, 0.1, C.rail, mx, yF + 0.41, 0, g); // one shared material: every bay merges into one mesh
+    box(bw - 0.4, 0.08, 0.2, C.trim, mx, yF + 0.86, 0, g);
+    panel(bw - 0.36, yE - y0 - 0.3, C.shops[(i * 5 + Math.round(Math.abs(x + z))) % C.shops.length], mx, y0 + (yE - y0 - 0.3) / 2, -V + 0.02, '+z', g);
+    panel(bw - 0.36, yT - yF - 0.2, C.wins[(i * 7 + Math.round(Math.abs(x))) % 3 === 0 ? 1 : 0], mx, yF + (yT - yF - 0.2) / 2, -V + 0.02, '+z', g);
+    box(0.36, yR - y0, 0.14, C.trim, cx, (yR + y0) / 2, -V + 0.05, g);
+    // a lantern in every other bay
+    if (i % 2 === 0) {
+      box(0.03, 0.5, 0.03, C.iron, mx, yF - 0.7, -V / 2, g);
+      box(0.3, 0.36, 0.3, M.lightWarm, mx, yF - 1.1, -V / 2, g, { cast: false, receive: false });
+      g.updateMatrixWorld(true);
+      CP_GLOW.push(new THREE.Vector3(mx, yF - 1.1, -V / 2).applyMatrix4(g.matrixWorld).toArray());
+    }
+  }
+  return g;
+}
+/** a cast-iron street lamp with two globes */
+function cpLamp(x, z, alongX = true) {
+  const C = cpMats();
+  cyl(0.07, 0.11, 4.4, C.iron, x, 2.2, z, scene, 10);
+  cyl(0.16, 0.2, 0.5, C.iron, x, 0.25, z, scene, 10);
+  const arm = box(alongX ? 1.5 : 0.06, 0.06, alongX ? 0.06 : 1.5, C.iron, x, 4.3, z);
+  void arm;
+  for (const s of [-0.7, 0.7]) {
+    const gx = x + (alongX ? s : 0), gz = z + (alongX ? 0 : s);
+    mesh(new THREE.SphereGeometry(0.2, 12, 10), M.lightWarm, gx, 4.05, gz, scene, { cast: false, receive: false });
+    CP_GLOW.push([gx, 4.05, gz]);
+  }
+}
+function buildConnaught() {
+  const D = 14, kerbN = ROAD.z - ROAD.half - 2.4 - 0.2, kerbF = ROAD.z + ROAD.half + 2.4 + 0.2; // building lines behind the pavements
+  // two wings frame the campus court, facing each other across the lawn
+  cpBlock(-31, kerbN, Math.PI / 2, kerbN + 21.6, D);
+  cpBlock(31, -21.6, -Math.PI / 2, kerbN + 21.6, D);
+  // the street: continuous colonnades both sides, open at the campus and at the apron across the road
+  cpBlock(-130, kerbN, 0, 85, D);
+  cpBlock(45, kerbN, 0, 85, D);
+  cpBlock(130, kerbF, Math.PI, 112.4, D);
+  cpBlock(-17.6, kerbF, Math.PI, 112.4, D);
+  cpBlock(17.6, kerbF + 16, Math.PI, 35.2, D);
+  // a paved walk along each wing
+  for (const sx of [-1, 1]) {
+    const pv = M.paving.clone(); pv.map = repeatOf(M.paving.map, 3 / 2.4, (kerbN + 21.6) / 2.4); PAVED.push(pv);
+    panel(3, kerbN + 21.6, pv, sx * 29.3, 0.011, (kerbN - 21.6) / 2, 'up');
+  }
+  // lamps along both pavements and down the wings
+  for (let x = -122; x <= 122; x += 17) { if (Math.abs(x) > 6) cpLamp(x, ROAD.z - ROAD.half - 0.7); cpLamp(x + 8.5, ROAD.z + ROAD.half + 0.7); }
+  for (const sx of [-1, 1]) for (let z = -16; z <= 24; z += 13) cpLamp(sx * 27.4, z, false);
+  glowPoints(CP_GLOW, 0xffd9a6, 1.6, scene);
+}
+
 /* ---------- The street outside the gate: pavements, median, autos, a bhel-puri cart ---------- */
 // Models from Sketchfab (CC BY 4.0): "Autorikshaw - Indian Tuk Tuk" by bhagathartworks, "Indian Ricksha" and
 // "Indian Shop" by anandmohan662, "Bhelpuri Shop By Ajay" by AJ_AY, "Indian Post Box" by Geeky_,
@@ -3614,7 +3756,7 @@ const STREET = { movers: [] };
 function buildStreetStatic() {
   const pave = M.paving.clone(); pave.map = repeatOf(M.paving.map, 260 / 2.4, 2.4 / 2.4);
   PAVED.push(pave);
-  const kerbY = new THREE.MeshStandardMaterial({ color: 0xe0b52a, roughness: 0.8 }), kerbK = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.8 });
+  const kerbY = new THREE.MeshStandardMaterial({ color: 0xa6a195, roughness: 0.9 }), kerbK = new THREE.MeshStandardMaterial({ color: 0x8e897e, roughness: 0.9 }); // plain stone kerbs
   for (const side of [-1, 1]) {
     const zk = ROAD.z + side * ROAD.half; // kerb line
     panel(260, 2.4, pave, 0, 0.012, zk + side * 1.2, 'up');
