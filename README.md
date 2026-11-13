@@ -26,6 +26,7 @@ and the tower are glTF models in `models/`.
 - Plants: "Scanned Plants and Grass (Free Download)" by Kless (CC BY 4.0): https://sketchfab.com/3d-models/scanned-plants-and-grass-free-download-d0fbc8fecfbb40bf9029bc97b6e9e122
 - Dry grass: "Simple grass chunks" by 3dhdscan (CC BY 4.0): https://sketchfab.com/3d-models/simple-grass-chunks-eb4f6dc9d4e3455ea3435385faf58b60
 - Trees: "Maple tree" by atrodler (CC BY 4.0): https://sketchfab.com/3d-models/maple-tree-4b27adcf92f644bdabf8ecc6c5bef399
+- Street: "Autorikshaw - Indian Tuk Tuk" by bhagathartworks, "Indian Ricksha" and "Indian Shop" by anandmohan662, "Bhelpuri Shop By Ajay" by AJ_AY, "Indian Post Box" by Geeky_, "Road Divider Indian Version" by Artistio. (all CC BY 4.0, Sketchfab)
 - Sky, HDRI and surface textures: Poly Haven (CC0), https://polyhaven.com
 
 ## Engine simulator

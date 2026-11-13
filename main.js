@@ -3160,6 +3160,8 @@ function airliner({ tail = M.paintNavy, stripe: stripeMat = M.paintCyan, gear = 
 
 /* ---------- Camera path ---------- */
 const PATH = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(0, 1.8, 50),
+  new THREE.Vector3(0, 1.78, 36.5),
   new THREE.Vector3(0, 1.75, 23),
   new THREE.Vector3(0, 1.72, 13),
   new THREE.Vector3(0, 1.66, 5.0),
@@ -3171,6 +3173,7 @@ const PATH = new THREE.CatmullRomCurve3([
 
 // Where the camera looks, keyed by its z along the walk
 const LOOK = [
+  { z: 50, v: [0, 4.6, 0] },
   { z: 23, v: [0, 4.2, 0] },
   { z: 13, v: [0, 3.3, 0] },
   { z: 5, v: [0, 2.0, -3] },
@@ -3255,6 +3258,7 @@ async function init() {
   for (const [k, pr] of Object.entries(airModels)) pr.then((m) => m && upgradeAirside({ [k]: m }));
   loadVegetation();
   loadNeighbours();
+  loadStreet();
   loadIGI();
   loadDeskEngine();
   uDoor = computeDoorU();
@@ -3264,6 +3268,7 @@ async function init() {
     if (o.isMesh && (o.material === M.glass || o.material?.transparent)) o.castShadow = false;
   });
 
+  buildStreetStatic();
   mark('built');
   mergeStatic();
   mark('merged');
@@ -3410,7 +3415,8 @@ async function loadVegetation() {
 
   // landside: the campus lawn around the building, off the plaza, path, road and building
   const land = (x, z) => !((Math.abs(x) < 15.8 && z > -0.6 && z < 12.6) || (Math.abs(x) < 2.8 && z < 32.6) || (z > 31.4 && z < 41.6)
-    || (Math.abs(x) < 15.5 && z > -24 && z < 1) || (z < -23.2));
+    || (Math.abs(x) < 15.5 && z > -24 && z < 1) || (z < -23.2)
+    || (z > 29.3 && z < 44.2) || (Math.abs(x) < 17.6 && z > 29 && z < 59.8)); // pavements and the apron across the road
   const front = [-75, 75, -23, 95];
   plantInstances(blades, clusterPoints(2600, front, land, rng, { spread: 3, per: 14 }), scene, rng, [0.7, 1.2]);
   plantInstances(cloves, clusterPoints(1400, front, land, rng, { spread: 2.5, per: 10 }), scene, rng, [0.8, 1.3]);
@@ -3596,6 +3602,102 @@ function buildCity(air) {
     near.userData.noCast = true;
     scene.add(near); // landside and airside both see them
   });
+}
+
+/* ---------- The street outside the gate: pavements, median, autos, a bhel-puri cart ---------- */
+// Models from Sketchfab (CC BY 4.0): "Autorikshaw - Indian Tuk Tuk" by bhagathartworks, "Indian Ricksha" and
+// "Indian Shop" by anandmohan662, "Bhelpuri Shop By Ajay" by AJ_AY, "Indian Post Box" by Geeky_,
+// "Road Divider Indian Version" by Artistio. Traffic keeps left: +x on the campus side, -x on the far side.
+const ROAD = { z: 36.5, half: 4.5, gate: 5 };
+const STREET = { movers: [] };
+/** pavements both sides with painted kerbs, built with the static scene (so the grass mask sees them) */
+function buildStreetStatic() {
+  const pave = M.paving.clone(); pave.map = repeatOf(M.paving.map, 260 / 2.4, 2.4 / 2.4);
+  PAVED.push(pave);
+  const kerbY = new THREE.MeshStandardMaterial({ color: 0xe0b52a, roughness: 0.8 }), kerbK = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.8 });
+  for (const side of [-1, 1]) {
+    const zk = ROAD.z + side * ROAD.half; // kerb line
+    panel(260, 2.4, pave, 0, 0.012, zk + side * 1.2, 'up');
+    if (side > 0) { // a paved apron across the road, where the walk begins (a bus stop's worth of space)
+      const apron = M.paving.clone(); apron.map = repeatOf(M.paving.map, 34 / 2.4, 16 / 2.4); PAVED.push(apron);
+      panel(34, 16, apron, 0, 0.011, zk + 2.4 + 8, 'up');
+    }
+    for (let x = -130; x < 130; x += 1) {
+      if (side < 0 && Math.abs(x + 0.5) < 2.6) continue; // the gate's dropped kerb
+      box(1, 0.15, 0.22, (Math.floor(x) & 1) ? kerbY : kerbK, x + 0.5, 0.075, zk + side * 0.11);
+    }
+  }
+}
+function seatModel(root, { height, length, keepLongest } = {}) {
+  root.updateMatrixWorld(true);
+  if (keepLongest) { // a kit of pieces: keep the longest one
+    let best = null, bestL = 0;
+    for (const c of root.getObjectByProperty('name', 'RootNode')?.children ?? []) {
+      const b = new THREE.Box3().setFromObject(c), z = b.getSize(new THREE.Vector3()), L = Math.max(z.x, z.z);
+      if (z.y > 0.05 && L > bestL) { bestL = L; best = c; }
+    }
+    if (best) for (const c of [...best.parent.children]) if (c !== best) c.removeFromParent();
+  }
+  root.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) if ('roughness' in m) { m.roughness = Math.max(m.roughness ?? 1, 0.6); m.metalness = Math.min(m.metalness ?? 0, 0.3); } });
+  root.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(root), c = b.getCenter(new THREE.Vector3()), z = b.getSize(new THREE.Vector3());
+  const inner = new THREE.Group(); inner.add(root);
+  root.position.set(-c.x, -b.min.y, -c.z);
+  const w = new THREE.Group(); w.add(inner);
+  const sc = height ? height / z.y : length ? length / Math.max(z.x, z.z) : 1;
+  w.scale.setScalar(sc);
+  w.userData.size = z.clone().multiplyScalar(sc);
+  return w;
+}
+function person(shirt) {
+  const g = crewman();
+  const m = new THREE.MeshStandardMaterial({ color: shirt, roughness: 0.85 });
+  g.traverse((o) => { if (o.isMesh && o.material === CREW.vest) o.material = m; });
+  g.children.forEach((c) => { if (c.isMesh && c.material === CREW.helmet) c.visible = false; });
+  return g;
+}
+async function loadStreet() {
+  const load = (f) => gltfLoader.loadAsync(`models/${f}.glb`).then((g) => g.scene).catch((e) => { console.warn('street', f, e); return null; });
+  const [auto, ricksha, bhel, shop, postbox, divider] = await Promise.all(['st_auto', 'st_ricksha', 'st_bhel', 'st_shop', 'st_postbox', 'st_divider'].map(load));
+  const g = new THREE.Group(); g.userData.dynamic = true; scene.add(g);
+  const put = (m, x, z, yaw) => { if (!m) return null; const c = m.clone(); c.position.set(x, 0, z); c.rotation.y = yaw; g.add(c); return c; };
+  // the median down the middle, with a gap at the gate
+  if (divider) {
+    const d = seatModel(divider, { keepLongest: true }), z = d.userData.size;
+    const along = z.x >= z.z ? 0 : Math.PI / 2, L = Math.max(z.x, z.z);
+    for (let x = -130 + L / 2; x < 130; x += L) if (Math.abs(x) - L / 2 > ROAD.gate) put(d, x, ROAD.z, along);
+  }
+  // the bhel-puri cart by the gate, people at it; the post box; corner shops across the road
+  const cart = bhel && seatModel(bhel, { height: 2.6 });
+  put(cart, 8.5, ROAD.z - ROAD.half - 1.25, 0); // painted front to the street
+  const shirts = [0xd94a4a, 0x3a6fb5, 0xf2f0ea, 0x6b4c9a, 0x2f7d5c, 0xe0a030];
+  [[6.9, 30.6, -1.2], [7.6, 29.9, -0.4], [10.3, 30.4, 1.3], [-6.5, 30.7, 0.3]].forEach(([x, z, yaw], i) => { const p = person(shirts[i]); p.position.set(x, 0, z); p.rotation.y = yaw; g.add(p); });
+  const box = postbox && seatModel(postbox, { height: 1.5 });
+  put(box, 4.0, ROAD.z - ROAD.half - 1.6, 0);
+  const kirana = shop && seatModel(shop, { height: 5.6 });
+  if (kirana) for (const x of [-16, 21]) put(kirana, x, ROAD.z + ROAD.half + 2.4 + kirana.userData.size.x / 2, Math.PI / 2);
+  // an auto stand by the gate
+  const tuk = auto && seatModel(auto, { length: 2.65 });
+  if (tuk) for (const [x, z] of [[-11, 33.3], [-14.3, 33.3], [-17.6, 33.4]]) put(tuk, x, z, -Math.PI / 2);
+  // moving traffic: autos both ways, a cycle rickshaw at walking pace, pedestrians on the pavements
+  const cyc = ricksha && seatModel(ricksha, { length: 3.0 });
+  const lane = (dir) => ROAD.z - dir * 2.3;
+  const run = (m, dir, speed, x0, yawFor) => { const c = put(m, x0, lane(dir), yawFor(dir)); if (c) STREET.movers.push({ g: c, dir, speed, x0, z: lane(dir) }); };
+  if (tuk) { run(tuk, 1, 9, -60, (d) => (d > 0 ? -Math.PI / 2 : Math.PI / 2)); run(tuk, -1, 8, 40, (d) => (d > 0 ? -Math.PI / 2 : Math.PI / 2)); run(tuk, -1, 10.5, -90, (d) => (d > 0 ? -Math.PI / 2 : Math.PI / 2)); }
+  if (cyc) run(cyc, 1, 3.2, 20, (d) => (d > 0 ? Math.PI / 2 : -Math.PI / 2));
+  [[1, 1.3, -40, 0x2f5f9e], [-1, 1.4, 30, 0xb84a3a], [1, 1.2, 70, 0xe8e2d4]].forEach(([dir, sp, x0, c]) => {
+    const p = person(c); g.add(p);
+    STREET.movers.push({ g: p, dir, speed: sp, x0, z: ROAD.z + (dir > 0 ? -1 : 1) * (ROAD.half + 1.3), walk: true });
+  });
+}
+function updateStreet(now) {
+  if (!STREET.movers.length || camera.position.z < -14) return;
+  const t = now / 1000;
+  for (const m of STREET.movers) {
+    const span = 280, x = ((m.x0 + 140 + m.dir * m.speed * t) % span + span) % span - 140;
+    m.g.position.set(x, m.walk ? Math.abs(Math.sin(t * 7 + m.x0)) * 0.04 : 0, m.z);
+    if (m.walk) m.g.rotation.y = m.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+  }
 }
 
 /* ---------- Neighbours: the plots around the campus ---------- */
@@ -4132,6 +4234,7 @@ function frame() {
   }
 
   updateGrass(now);
+  updateStreet(now);
   renderFrame(now, dt, outdoors, out);
 }
 
