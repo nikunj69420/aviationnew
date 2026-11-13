@@ -2627,6 +2627,7 @@ function buildAirside() {
   AIRSIDE.vehicles.push({ train, cx: -70, cz: -59, rx: 48, rz: 4.5, speed: 5 });
 
   buildFarField(air, { white, yellow, tarmacAt, apronMat });
+  buildCity(air);
   buildDeck(air);
   air.traverse((o) => { o.castShadow = false; });
 }
@@ -3027,6 +3028,8 @@ async function init() {
   updateAirside(performance.now()); // place every vehicle on its route before the first frame
   for (const [k, pr] of Object.entries(airModels)) pr.then((m) => m && upgradeAirside({ [k]: m }));
   loadVegetation();
+  loadNeighbours();
+  loadIGI();
   loadDeskEngine();
   uDoor = computeDoorU();
 
@@ -3236,6 +3239,169 @@ async function loadVegetation() {
       scene.add(im);
     });
   }
+}
+
+/* ---------- The rest of IGI, and a city all round ---------- */
+// More of the VIDP scenery (AvinashC, with permission): T3's main hall and its plant sit where the scenery puts them
+// relative to the pier; Terminal 2 and the ATC complex stand behind T3 across the far side, facing the airfield.
+const VIDP_S0 = 0.873;
+const IGI_CLIP = new THREE.Plane(new THREE.Vector3(0, 0, -1), -415); // keeps z < -415, beyond the far taxiway // the scale the scenery places the pier at; the pier here is drawn at 1, so the rest scale by s / s0
+const IGI_EXTRAS = [
+  // [file, real offset from the pier east/north in metres, heading, scenery scale] -> placed relative to the pier
+  ['vidp_t3ent', 101, 75, 180, 0.886], ['vidp_hvac', 411, -98, 180, 0.873],
+];
+const IGI_FREE = [
+  // [file, scene x, scene z, yaw, scenery scale]: placed by hand, behind T3
+  ['vidp_t2', -880, -720, T3P.rot, 0.861], ['vidp_atc', -470, -760, T3P.rot, 0.9],
+  ['vidp_atcgp1', -560, -830, T3P.rot, 0.95], ['vidp_atcgp2', -390, -700, T3P.rot, 0.783],
+];
+async function loadIGI() {
+  const load = (f) => gltfLoader.loadAsync(`models/${f}.glb`).then((g) => g.scene).catch((e) => { console.warn('igi', f, e); return null; });
+  const prep = (root) => {
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = o.receiveShadow = false;
+      for (const m of [].concat(o.material)) if ('roughness' in m) { m.roughness = Math.max(m.roughness ?? 1, 0.6); m.metalness = Math.min(m.metalness ?? 0, 0.3); }
+    });
+    root.userData.dynamic = true;
+    return root;
+  };
+  const frame = new THREE.Group(); // the pier's own frame: model metres, turned and moved as the pier is
+  frame.rotation.y = T3P.rot;
+  frame.position.set(T3P.tx, 0.03, T3P.tz);
+  frame.userData.dynamic = true;
+  AIRSIDE.root.add(frame);
+  await Promise.all([
+    ...IGI_EXTRAS.map(async ([f, e, n, h, sc]) => {
+      const r = await load(f); if (!r) return;
+      prep(r);
+      // our runway sits closer to T3 than IGI's real one: trim the forecourt end so nothing crosses it
+      renderer.localClippingEnabled = true;
+      r.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) m.clippingPlanes = [IGI_CLIP]; });
+      r.position.set(e / VIDP_S0, 0, -n / VIDP_S0);
+      r.rotation.y = -THREE.MathUtils.degToRad(h - 180);
+      r.scale.setScalar(sc / VIDP_S0);
+      frame.add(r);
+    }),
+    ...IGI_FREE.map(async ([f, x, z, yaw, sc]) => {
+      const r = await load(f); if (!r) return;
+      prep(r);
+      r.position.set(x, 0.03, z);
+      r.rotation.y = yaw;
+      r.scale.setScalar(sc / VIDP_S0);
+      AIRSIDE.root.add(r);
+    }),
+  ]);
+}
+
+/** windows for the city blocks: lit at dusk, some dark, a few with the blinds down */
+function cityFacade(base, frame, seed) {
+  const rnd = mulberry32(seed);
+  return canvasTex(256, 512, (g, w, h) => {
+    g.fillStyle = base; g.fillRect(0, 0, w, h);
+    for (let y = 8; y < h - 8; y += 21) {
+      g.fillStyle = frame; g.fillRect(0, y + 15, w, 4);
+      for (let x = 6; x < w - 6; x += 18) {
+        const r = rnd();
+        g.fillStyle = r < 0.32 ? `rgba(255,${200 + (rnd() * 40) | 0},${130 + (rnd() * 60) | 0},${0.75 + rnd() * 0.25})` : r < 0.4 ? '#cfc6b4' : '#2b3340';
+        g.fillRect(x, y, 12, 13);
+      }
+    }
+  });
+}
+/** a ring of city blocks: a near belt around the campus and a far belt round the whole airfield, fading into the haze */
+function buildCity(air) {
+  const rnd = mulberry32(404);
+  const styles = [
+    { tex: cityFacade('#b9ab92', '#8f846f', 1), color: 0xffffff }, // sandstone
+    { tex: cityFacade('#5d6f82', '#3d4a58', 2), color: 0xffffff }, // glass offices
+    { tex: cityFacade('#d9d2c4', '#a8a091', 3), color: 0xffffff }, // white plaster
+    { tex: cityFacade('#9a6d55', '#7a5443', 4), color: 0xffffff }, // brick
+  ];
+  const lots = styles.map(() => []);
+  const free = (x, z) => {
+    // keep off the campus, the road, the airfield and its approach
+    if (z > -40 && z < 75 && Math.abs(x) < 82) return false;
+    if (z < -20 && z > -1080 && x > -2000 && x < 1250) return false; // the airside
+    if (Math.abs(z + 322) < 120 && x > 700 && x < 1800) return false; // approach lights
+    return true;
+  };
+  const add = (x, z, w, d, h) => { if (free(x, z)) lots[(rnd() * styles.length) | 0].push([x, z, w, d, h]); };
+  // near belt: streets of 6-14 storey blocks round the campus, tallest further out
+  for (let x = -330; x <= 330; x += 34) for (let z = 82; z <= 380; z += 32) add(x + (rnd() - 0.5) * 6, z + (rnd() - 0.5) * 6, 18 + rnd() * 10, 16 + rnd() * 10, 14 + rnd() * 18 + (z - 82) * 0.06);
+  for (const sx of [-1, 1]) for (let x = 92; x <= 330; x += 34) for (let z = -18; z <= 80; z += 30) add(sx * (x + rnd() * 6), z, 18 + rnd() * 10, 16 + rnd() * 8, 12 + rnd() * 16);
+  // far belt: round the whole field, 600 m to 1.4 km out, taller with distance
+  for (let i = 0; i < 520; i++) {
+    const a = rnd() * Math.PI * 2, r = 700 + rnd() * 700;
+    const x = -350 + Math.cos(a) * r * 1.6, z = -500 + Math.sin(a) * r;
+    add(x, z, 24 + rnd() * 30, 22 + rnd() * 30, 18 + rnd() * rnd() * 70);
+  }
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  geo.translate(0, 0.5, 0);
+  const d = new THREE.Object3D();
+  styles.forEach((st, k) => {
+    const list = lots[k];
+    if (!list.length) return;
+    st.tex.wrapS = st.tex.wrapT = THREE.RepeatWrapping;
+    const mat = new THREE.MeshStandardMaterial({ map: st.tex, emissive: 0xffffff, emissiveMap: st.tex, emissiveIntensity: 0.18, roughness: 0.85 });
+    // windows at true size: one texture tile is 36 m wide and 24 storeys (79 m) tall, whatever the block's size
+    mat.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader.replace('#include <uv_vertex>', `#include <uv_vertex>
+        vec3 isc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+        vec2 wuv = vec2(uv.x * (abs(normal.x) > 0.5 ? isc.z : isc.x) / 36.0, uv.y * isc.y / 79.0);
+        #ifdef USE_MAP
+          vMapUv = wuv;
+        #endif
+        #ifdef USE_EMISSIVEMAP
+          vEmissiveMapUv = wuv;
+        #endif`);
+    };
+    const roof = new THREE.MeshStandardMaterial({ color: [0x8d877c, 0x6f747a, 0xa29d93, 0x7d6a5f][k], roughness: 0.95 });
+    const near = new THREE.InstancedMesh(geo, [mat, mat, roof, roof, mat, mat], list.length);
+    list.forEach(([x, z, w, dd, h], i) => {
+      d.position.set(x, 0, z); d.rotation.set(0, (rnd() - 0.5) * 0.12, 0); d.scale.set(w, h, dd); d.updateMatrix();
+      near.setMatrixAt(i, d.matrix);
+    });
+    near.computeBoundingSphere();
+    near.userData.dynamic = true;
+    scene.add(near); // landside and airside both see them
+  });
+}
+
+/* ---------- Neighbours: the plots around the campus ---------- */
+// "Futuristic Building" by 3DHaupt (CC BY-NC 4.0) and "3d low poly buidling" by Mahreen (CC BY 4.0), Sketchfab.
+async function loadNeighbours() {
+  const load = (u) => gltfLoader.loadAsync(u).then((g) => g.scene).catch((e) => { console.warn('building', u, e); return null; });
+  const [ops, brick] = await Promise.all([load('models/bldg_futuristic.glb'), load('models/bldg_lowpoly.glb')]);
+  const seat = (root, scale) => { // drop any display plate, then stand the model on the ground at its footprint's centre
+    root.updateMatrixWorld(true);
+    const plates = [];
+    root.traverse((o) => { if (o.isMesh) { const b = new THREE.Box3().setFromObject(o), z = b.getSize(new THREE.Vector3()); if (z.y < 0.6 && z.x > 12 && z.z > 12) plates.push(o); } });
+    plates.forEach((o) => o.removeFromParent());
+    root.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) if ('roughness' in m) { m.roughness = Math.max(m.roughness ?? 1, 0.7); m.metalness = Math.min(m.metalness ?? 0, 0.2); } });
+    const b = new THREE.Box3().setFromObject(root), c = b.getCenter(new THREE.Vector3());
+    const inner = new THREE.Group();
+    inner.add(root);
+    root.position.set(-c.x, -b.min.y, -c.z);
+    const w = new THREE.Group();
+    w.add(inner);
+    w.scale.setScalar(scale);
+    return w;
+  };
+  const place = (model, spots) => {
+    if (!model) return;
+    const g = new THREE.Group();
+    for (const [x, z, yaw] of spots) { const c = model.clone(); c.position.set(x, 0, z); c.rotation.y = yaw; g.add(c); }
+    const baked = bakeGroup(g);
+    baked.userData.dynamic = true;
+    scene.add(baked);
+  };
+  // the ops block with its mast on either flank; brick blocks along the far side of the road
+  place(ops && seat(ops, 1), [[-78, 6, Math.PI / 2]]);
+  const row = [];
+  for (let x = -76; x <= 76; x += 11.5) if (Math.abs(x) > 4) row.push([x, 63 + (Math.abs(x) % 3), (Math.round(x) % 2) * 0.03]); // across the road
+  for (const sx of [-1, 1]) for (let z = -18; z <= 52; z += 11.5) if (!(sx < 0 && Math.abs(z - 6) < 16)) row.push([sx * 72, z, sx > 0 ? -Math.PI / 2 : Math.PI / 2]); // the flanks
+  place(brick && seat(brick, 1.7), row);
 }
 
 /* ---------- Grass: real blades on every unpaved surface ---------- */
