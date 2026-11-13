@@ -1879,9 +1879,6 @@ const GradeShader = {
     float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main() {
       vec2 uv = vUv;
-      // heat shimmer just above the horizon band, out on the airfield
-      float band = smoothstep(0.36, 0.46, uv.y) * (1.0 - smoothstep(0.5, 0.58, uv.y));
-      uv.x += sin(uv.y * 340.0 + uTime * 7.0) * 0.0007 * band * uShimmer;
       vec3 c = texture2D(tDiffuse, uv).rgb;
       float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
       c = mix(c, c * vec3(1.035, 0.995, 0.955), smoothstep(0.45, 1.0, l)); // warm highlights
@@ -1905,7 +1902,7 @@ function setupFX() {
   gtao.blendIntensity = 0.85;
   composer.addPass(gtao);
   gtao.setSize(w * pixelRatio * 0.5, h * pixelRatio * 0.5); // half resolution (after addPass, which sizes it full)
-  const bloom = new UnrealBloomPass(new THREE.Vector2(w / 2, h / 2), 0.32, 0.55, 0.92);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(w / 2, h / 2), 0.2, 0.5, 1.15); // only real light sources glow
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
   const grade = new ShaderPass(GradeShader);
@@ -2351,7 +2348,7 @@ function loadSkyAndLight(skyMesh) {
     tex.colorSpace = THREE.SRGBColorSpace;
     scene.background = tex;
     scene.backgroundRotation.y = SKY_ROT;
-    scene.backgroundIntensity = 0.85;
+    scene.backgroundIntensity = 0.75;
     skyMesh.visible = false;
     // the fog takes the photo's colour just above the horizon, so distant ground melts into this sky
     const c = document.createElement('canvas');
@@ -4081,7 +4078,8 @@ function frame() {
   const outdoors = Math.max(out, range(camera.position.z, -0.5, 3.5));
   scene.environmentIntensity = 0.3 + 0.55 * outdoors;
   if (hemi) hemi.intensity = 0.55 + 0.15 * outdoors;
-  if (SUN) SUN.intensity = 1.7 + 0.9 * outdoors; // outdoors the low sun is the key light: shadows that read
+  if (SUN) SUN.intensity = 1.7 + 0.45 * outdoors; // outdoors the low sun is the key light: shadows that read
+  renderer.toneMappingExposure = 0.92 - 0.1 * outdoors; // a camera stops down outside
   const near = camera.position.z < -25.5 ? 0.3 : 0.05;
   if (camera.near !== near) { camera.near = near; camera.updateProjectionMatrix(); }
   if (AIRSIDE.root) updateAirside(now);
