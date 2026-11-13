@@ -22,6 +22,9 @@ and the tower are glTF models in `models/`.
 - Pushback tug: "GameAsset - Airport Pushback" by Loic ALIX (CC BY-NC 4.0): https://sketchfab.com/3d-models/gameasset-airport-pushback-b7fce88407db486fa9a082042424c15f
 - Catering truck: "Airport Catering Truck" by spot1studios (CC BY 4.0): https://sketchfab.com/3d-models/airport-catering-truck-289f4e2cfa3f4722b0476b1fc37681d8
 - Runway rubber deposits: tyre-gum texture from "BetterTaxiwayMarker and HeavySkidMark" (MSFS) by FlyerGaia, used with permission
+- Plants: "Scanned Plants and Grass (Free Download)" by Kless (CC BY 4.0): https://sketchfab.com/3d-models/scanned-plants-and-grass-free-download-d0fbc8fecfbb40bf9029bc97b6e9e122
+- Dry grass: "Simple grass chunks" by 3dhdscan (CC BY 4.0): https://sketchfab.com/3d-models/simple-grass-chunks-eb4f6dc9d4e3455ea3435385faf58b60
+- Trees: "Maple tree" by atrodler (CC BY 4.0): https://sketchfab.com/3d-models/maple-tree-4b27adcf92f644bdabf8ecc6c5bef399
 - Sky, HDRI and surface textures: Poly Haven (CC0), https://polyhaven.com
 
 ## Engine simulator

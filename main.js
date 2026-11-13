@@ -785,9 +785,12 @@ function buildExterior() {
   for (const [x, z] of [[-14, 9], [15, 7], [-20, 14], [21, 16]]) tree(x, z);
 }
 
+const CODE_TREES = [];
 function tree(x, z) {
   const g = new THREE.Group();
   g.position.set(x, 0, z);
+  g.userData.dynamic = true; // replaced by a maple once the vegetation loads
+  CODE_TREES.push(g);
   scene.add(g);
   const h = 4 + rand() * 1.5;
   cyl(0.1, 0.16, h * 0.55, M.stem, 0, h * 0.275, 0, g, 10);
@@ -2192,11 +2195,11 @@ function dressScene() {
   dress(M.leather, 'brown_leather', { repeat: [2, 2], diff: false, normal: 0.6, rough: 1 });
   // outside: paving, lawn, asphalt, concrete
   for (const m of PAVED) dress(m, 'rectangular_paving', { keepRepeatOf: m.map, k: 1.2, color: 0xffffff, rough: 1 });
-  for (const m of LAWN) dress(m, 'leafy_grass', { keepRepeatOf: m.map, k: 1.3, color: 0xb9c7a6, rough: 1 });
+  for (const m of LAWN) dress(m, 'leafy_grass', { keepRepeatOf: m.map, k: 1.3, color: 0x6f7d4c, rough: 1 }); // dark under the blades
   for (const m of ASPHALT) dress(m, 'asphalt_02', { keepRepeatOf: m.map, k: 1.5, rough: 1 });
   // the airfield after Delhi IGI: dusty olive infield, pale concrete apron slabs, rubber-marked runway asphalt
   for (const m of CONCRETE_GROUND) dress(m, 'concrete_pavement', { keepRepeatOf: m.map, k: 0.75, color: 0xeae4d8, rough: 1 });
-  for (const m of AIRFIELD) dress(m, 'withered_grass', { keepRepeatOf: m.map, k: 1, color: 0xc9bda0, rough: 1 });
+  for (const m of AIRFIELD) dress(m, 'withered_grass', { keepRepeatOf: m.map, k: 1, color: 0x9a8e66, rough: 1 }); // olive-khaki under the blades
   for (const m of RUNWAY) dress(m, 'aerial_asphalt_01', { keepRepeatOf: m.map, k: 1, color: 0xa29f99, rough: 1 });
   for (const m of RIBBED) dress(m, 'box_profile_metal_sheet', { repeat: m.userData.rep, diff: false, normal: 1.2, rough: 0.75 });
   // inside: acoustic ceiling texture, real carpet pile in room A
@@ -3023,6 +3026,7 @@ async function init() {
   mark('airside');
   updateAirside(performance.now()); // place every vehicle on its route before the first frame
   for (const [k, pr] of Object.entries(airModels)) pr.then((m) => m && upgradeAirside({ [k]: m }));
+  loadVegetation();
   loadDeskEngine();
   uDoor = computeDoorU();
 
@@ -3036,6 +3040,7 @@ async function init() {
   mark('merged');
   loadSkyAndLight(skyMesh);
   dressScene();
+  buildGrass(skyMesh);
   renderer.shadowMap.autoUpdate = false; // nothing that casts shadows moves, so bake them once
   renderer.shadowMap.needsUpdate = true;
 
@@ -3104,6 +3109,272 @@ function mergeStatic() {
     scene.add(m);
     b.geos.forEach((g) => g.dispose());
   }
+}
+
+/* ---------- Vegetation: scanned plants, dry grass and maples, instanced ---------- */
+// "Scanned Plants and Grass (Free Download)" by Kless, "Simple grass chunks" by 3dhdscan and "Maple tree" by atrodler,
+// all CC BY 4.0 on Sketchfab. Each piece becomes one InstancedMesh, scattered in loose clusters off the hard surfaces.
+function vegPieces(root) {
+  root.updateMatrixWorld(true);
+  const out = [];
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const g = o.geometry.clone();
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+    floatGeometry(g);
+    g.applyMatrix4(o.matrixWorld);
+    g.computeBoundingBox();
+    const b = g.boundingBox, c = b.getCenter(new THREE.Vector3()), size = b.getSize(new THREE.Vector3());
+    g.translate(-c.x, -b.min.y, -c.z);
+    g.computeBoundingSphere();
+    const m = o.material.clone();
+    m.side = THREE.DoubleSide; m.transparent = false; m.alphaTest = 0.45; m.depthWrite = true;
+    if ('roughness' in m) { m.roughness = Math.max(m.roughness ?? 1, 0.85); m.metalness = 0; }
+    out.push({ name: o.material.name, geo: g, mat: m, size });
+  });
+  return out;
+}
+/** n positions in clusters inside the box, kept where ok(x, z) */
+function clusterPoints(n, [x0, x1, z0, z1], ok, rng, { spread = 4, per = 12 } = {}) {
+  const pts = [];
+  let guard = 0;
+  while (pts.length < n && guard++ < n * 40) {
+    const cx = x0 + rng() * (x1 - x0), cz = z0 + rng() * (z1 - z0);
+    const k = 1 + Math.floor(rng() * per);
+    for (let i = 0; i < k && pts.length < n; i++) {
+      const a = rng() * Math.PI * 2, r = spread * Math.sqrt(-2 * Math.log(1 - rng() * 0.999)) * 0.5;
+      const x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+      if (x > x0 && x < x1 && z > z0 && z < z1 && ok(x, z)) pts.push([x, z]);
+    }
+  }
+  return pts;
+}
+function plantInstances(piece, pts, parent, rng, [s0, s1] = [0.8, 1.3], sink = 0) {
+  if (!piece || !pts.length) return null;
+  const im = new THREE.InstancedMesh(piece.geo, piece.mat, pts.length);
+  const d = new THREE.Object3D();
+  pts.forEach(([x, z], i) => {
+    const sc = s0 + rng() * (s1 - s0);
+    d.position.set(x, -sink * sc, z);
+    d.rotation.set((rng() - 0.5) * 0.08, rng() * Math.PI * 2, (rng() - 0.5) * 0.08);
+    d.scale.setScalar(sc);
+    d.updateMatrix();
+    im.setMatrixAt(i, d.matrix);
+  });
+  im.computeBoundingSphere();
+  im.castShadow = false; im.receiveShadow = false;
+  im.userData.dynamic = true;
+  parent.add(im);
+  return im;
+}
+async function loadVegetation() {
+  const load = (u) => gltfLoader.loadAsync(u).then((g) => g.scene).catch((e) => { console.warn('vegetation', u, e); return null; });
+  const [plants, grass, maple] = await Promise.all([load('models/veg_plants.glb'), load('models/veg_grass.glb'), load('models/maple.glb')]);
+  const rng = mulberry32(77);
+  const P = plants ? vegPieces(plants) : [], G = grass ? vegPieces(grass) : [];
+  const pick = (list, name, test = () => true) => list.find((v) => v.name === name && test(v));
+  const blades = pick(P, 'Grass_Blades'), cloves = pick(P, 'Grass_Cloves'), dand = pick(P, 'dandelion'), leaf5 = pick(P, '5_leaf_ground_plant');
+  const covers = P.filter((v) => v.name === 'Ground_Cover_Bunch'), purple = pick(P, 'Purple_Flower');
+  const tuft = pick(G, 'rostlinka_07c', (v) => v.size.x < 1), patch = pick(G, 'rostlinka_07c', (v) => v.size.x >= 1), weeds = pick(G, 'rostlinka12_2k');
+
+  // landside: the campus lawn around the building, off the plaza, path, road and building
+  const land = (x, z) => !((Math.abs(x) < 15.8 && z > -0.6 && z < 12.6) || (Math.abs(x) < 2.8 && z < 32.6) || (z > 31.4 && z < 41.6)
+    || (Math.abs(x) < 15.5 && z > -24 && z < 1) || (z < -23.2));
+  const front = [-75, 75, -23, 95];
+  plantInstances(blades, clusterPoints(2600, front, land, rng, { spread: 3, per: 14 }), scene, rng, [0.7, 1.2]);
+  plantInstances(cloves, clusterPoints(1400, front, land, rng, { spread: 2.5, per: 10 }), scene, rng, [0.8, 1.3]);
+  plantInstances(dand, clusterPoints(160, front, land, rng, { spread: 3, per: 6 }), scene, rng, [0.7, 1.1]);
+  plantInstances(leaf5, clusterPoints(140, front, land, rng, { spread: 2, per: 5 }), scene, rng, [0.6, 1.0]);
+  covers.forEach((c) => plantInstances(c, clusterPoints(22, front, (x, z) => land(x, z) && (Math.abs(x) > 18 || z > 14), rng, { spread: 6, per: 3 }), scene, rng, [0.5, 0.8], 0.15));
+  plantInstances(purple, clusterPoints(30, front, (x, z) => land(x, z) && Math.abs(x) > 16, rng, { spread: 4, per: 4 }), scene, rng, [0.5, 0.8]);
+  plantInstances(tuft, clusterPoints(1600, front, land, rng, { spread: 3, per: 10 }), scene, rng, [0.9, 1.5]);
+
+  // airside: dry tufts and weeds over the dusty infield between the taxiway and the runway, and beyond it
+  const conn = AIRSIDE.route?.conn ?? [];
+  const infield = (x, z) => conn.every((c) => Math.abs(x - c) > 16) && !(z > -300 && z < -146 && Math.abs(x) > 700);
+  const far = (x, z) => [-600, -150, 300].every((c) => Math.abs(x - c) > 16);
+  const air = AIRSIDE.root;
+  plantInstances(tuft, [...clusterPoints(3200, [-650, 650, -292, -149], infield, rng, { spread: 6, per: 20 }),
+    ...clusterPoints(600, [-900, 700, -390, -355], far, rng, { spread: 6, per: 16 }),
+    ...clusterPoints(300, [-260, 260, -122.5, -116.5], () => true, rng, { spread: 3, per: 8 })], air, rng, [0.9, 1.8]);
+  plantInstances(patch, clusterPoints(70, [-600, 600, -288, -152], infield, rng, { spread: 30, per: 4 }), air, rng, [0.9, 1.6], 0.05);
+  plantInstances(weeds, clusterPoints(40, [-500, 500, -288, -152], infield, rng, { spread: 25, per: 3 }), air, rng, [1, 1.5], 0.05);
+
+  // maples: in place of the code-built trees, along the road and around the campus
+  if (maple) {
+    maple.updateMatrixWorld(true);
+    const all = new THREE.Box3().setFromObject(maple), c = all.getCenter(new THREE.Vector3());
+    const base = 9 / (all.max.y - all.min.y); // the tree arrives in centimetres: about 9 m tall here
+    const spots = [...CODE_TREES.map((t) => [t.position.x, t.position.z]),
+      [-26, 26], [26, 27], [-40, 28], [40, 27], [-56, 26], [56, 28], [-30, 47], [30, 46], [-48, 48], [48, 47],
+      [-24, -8], [24, -12], [-34, -16], [36, -6]];
+    CODE_TREES.forEach((t) => t.removeFromParent());
+    const tr = mulberry32(5);
+    const mats = spots.map(([x, z]) => {
+      const d = new THREE.Object3D();
+      d.position.set(x, 0, z); d.rotation.y = tr() * Math.PI * 2; d.scale.setScalar(base * (0.85 + tr() * 0.35));
+      d.updateMatrix();
+      return d.matrix.clone();
+    });
+    // bark and leaves share one pivot: seat both on the whole tree's footprint, not their own centres
+    maple.traverse((o) => {
+      if (!o.isMesh) return;
+      const g = o.geometry.clone();
+      for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+      floatGeometry(g);
+      g.applyMatrix4(o.matrixWorld);
+      g.translate(-c.x, -all.min.y, -c.z);
+      g.computeBoundingSphere();
+      const m = o.material.clone();
+      m.side = THREE.DoubleSide; m.transparent = false; m.alphaTest = 0.5;
+      if ('roughness' in m) { m.roughness = 0.9; m.metalness = 0; }
+      if (/leaf/i.test(m.name)) m.color.set(0x7d9a52); // a deeper summer green than the pale scan
+      const im = new THREE.InstancedMesh(g, m, mats.length);
+      mats.forEach((mx, i) => im.setMatrixAt(i, mx));
+      im.computeBoundingSphere();
+      im.userData.dynamic = true;
+      scene.add(im);
+    });
+  }
+}
+
+/* ---------- Grass: real blades on every unpaved surface ---------- */
+// A top-down mask of the scene says where grass may grow (red) and how lush it is (green: campus lawn vs dry airfield).
+// Two instanced layers of blade clumps follow the camera: each clump keeps a fixed world position (its offset wraps
+// around the camera), so nothing swims; clumps fade to nothing toward the layer's edge, where the ground texture takes over.
+const GRASS = { layers: [], mask: null, box: { x0: -2300, x1: 1700, z0: -1500, z1: 200 } };
+function grassMask() {
+  const { x0, x1, z0, z1 } = GRASS.box, W = x1 - x0, H = z1 - z0;
+  const pxW = 2000, pxH = Math.round(pxW * H / W);
+  const rt = new THREE.WebGLRenderTarget(pxW, pxH);
+  const cam = new THREE.OrthographicCamera(-W / 2, W / 2, H / 2, -H / 2, 1, 2000);
+  cam.up.set(0, 0, -1);
+  cam.position.set((x0 + x1) / 2, 900, (z0 + z1) / 2);
+  cam.lookAt((x0 + x1) / 2, 0, (z0 + z1) / 2);
+  const lush = new THREE.MeshBasicMaterial({ color: 0xffff00, side: THREE.DoubleSide });
+  const dry = new THREE.MeshBasicMaterial({ color: 0xff3300, side: THREE.DoubleSide });
+  const none = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+  const lawns = new Set(LAWN), fields = new Set(AIRFIELD);
+  const swapped = [], hidden = [];
+  const airWas = AIRSIDE.root.visible;
+  AIRSIDE.root.visible = true;
+  for (const m of AIRSIDE.movers) if (m.g.visible) { m.g.visible = false; hidden.push(m.g); }
+  scene.traverse((o) => {
+    if (o.isPoints || o.isSprite || o.isLine) { if (o.visible) { o.visible = false; hidden.push(o); } return; }
+    if (!o.isMesh || o === GRASS.skip) return;
+    swapped.push([o, o.material]);
+    o.material = lawns.has(o.material) ? lush : fields.has(o.material) ? dry : none;
+  });
+  const bg = scene.background, fog = scene.fog;
+  scene.background = new THREE.Color(0x000000); scene.fog = null;
+  renderer.setRenderTarget(rt);
+  renderer.render(scene, cam);
+  const px = new Uint8Array(pxW * pxH * 4);
+  renderer.readRenderTargetPixels(rt, 0, 0, pxW, pxH, px);
+  renderer.setRenderTarget(null);
+  scene.background = bg; scene.fog = fog;
+  swapped.forEach(([o, m]) => { o.material = m; });
+  hidden.forEach((o) => { o.visible = true; });
+  AIRSIDE.root.visible = airWas;
+  rt.dispose(); lush.dispose(); dry.dispose(); none.dispose();
+  const tex = new THREE.DataTexture(px, pxW, pxH, THREE.RGBAFormat);
+  tex.magFilter = tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex; // row 0 is the +z edge (the view's bottom), column 0 the -x edge
+}
+/** a clump of tapered blades, up to 1 unit tall (position.y doubles as the root-to-tip fraction); detailed blades have a
+    bend (3 triangles), far ones are a single triangle */
+function bladeClump(blades, detailed) {
+  const pos = [], idx = [];
+  const rnd = mulberry32(9);
+  for (let b = 0; b < blades; b++) {
+    const a = rnd() * Math.PI * 2, r = rnd() * 0.08, lean = 0.12 + rnd() * 0.22, w = 0.03 + rnd() * 0.02, h = 0.6 + rnd() * 0.4;
+    const cx = Math.cos(a) * r, cz = Math.sin(a) * r, dx = Math.cos(a + 1.3), dz = Math.sin(a + 1.3), lx = Math.cos(a) * lean, lz = Math.sin(a) * lean;
+    const base = pos.length / 3;
+    pos.push(cx - dx * w, 0, cz - dz * w, cx + dx * w, 0, cz + dz * w);
+    if (detailed) {
+      pos.push(cx - dx * w * 0.7 + lx * 0.35, h * 0.5, cz - dz * w * 0.7 + lz * 0.35, cx + dx * w * 0.7 + lx * 0.35, h * 0.5, cz + dz * w * 0.7 + lz * 0.35);
+      pos.push(cx + lx, h, cz + lz);
+      idx.push(base, base + 1, base + 2, base + 1, base + 3, base + 2, base + 2, base + 3, base + 4);
+    } else {
+      pos.push(cx + lx, h, cz + lz);
+      idx.push(base, base + 1, base + 2);
+    }
+  }
+  const g = new THREE.InstancedBufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(pos.length).fill(0).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+  g.setIndex(idx);
+  return g;
+}
+function grassLayer(size, count, height, seed, blades, detailed) {
+  const geo = bladeClump(blades, detailed);
+  const off = new Float32Array(count * 4), rnd = mulberry32(seed);
+  for (let i = 0; i < count; i++) { off[i * 4] = rnd() * size; off[i * 4 + 1] = rnd() * size; off[i * 4 + 2] = rnd(); off[i * 4 + 3] = rnd(); }
+  geo.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 4));
+  geo.instanceCount = count;
+  const { x0, x1, z0, z1 } = GRASS.box;
+  const u = {
+    uCam: { value: new THREE.Vector2() }, uTime: { value: 0 }, uSize: { value: size }, uHeight: { value: height },
+    uMask: { value: GRASS.mask }, uBox: { value: new THREE.Vector4(x0, z1, x1 - x0, z1 - z0) },
+  };
+  const mat = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide, roughness: 0.9, metalness: 0 });
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute vec4 aOff; uniform vec2 uCam; uniform float uTime, uSize, uHeight; uniform sampler2D uMask; uniform vec4 uBox;
+        varying float vTip; varying float vLush; varying float vHash; varying float vPatch;`)
+      .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);')
+      .replace('#include <begin_vertex>', `
+        vec2 wp = uCam + mod(aOff.xy - uCam + 0.5 * uSize, uSize) - 0.5 * uSize;
+        vec2 muv = vec2((wp.x - uBox.x) / uBox.z, (uBox.y - wp.y) / uBox.w);
+        vec4 mk = texture2D(uMask, muv);
+        float inside = step(0.0, muv.x) * step(muv.x, 1.0) * step(0.0, muv.y) * step(muv.y, 1.0);
+        float d = distance(wp, uCam);
+        float fade = smoothstep(0.5 * uSize, 0.36 * uSize, d);
+        float grow = smoothstep(0.55, 0.85, mk.r) * inside;
+        float h = uHeight * (0.6 + aOff.w * 0.8) * mix(0.8, 1.15, mk.g) * fade * grow;
+        float ang = aOff.z * 6.2831853, c = cos(ang), sn = sin(ang);
+        vec3 transformed = vec3(position);
+        float tip = position.y;
+        transformed.y *= h;
+        transformed.xz *= (0.75 + aOff.w * 0.6) * step(0.001, h) * (h / max(uHeight, 0.001) * 0.6 + 0.4);
+        transformed.xz = vec2(c * transformed.x - sn * transformed.z, sn * transformed.x + c * transformed.z);
+        float gust = sin(uTime * 1.3 + wp.x * 0.11 + wp.y * 0.07) * 0.5 + 0.5;
+        float sway = (sin(uTime * 2.1 + wp.x * 0.8 + wp.y * 0.6) * 0.6 + gust * 0.9) * tip * tip * h * 0.35;
+        transformed.x += sway; transformed.z += sway * 0.4;
+        transformed.xz += wp;
+        vTip = tip; vLush = mk.g; vHash = aOff.w;
+        vPatch = sin(wp.x * 0.043 + sin(wp.y * 0.031) * 2.0) * sin(wp.y * 0.052 + 1.7) * 0.5 + 0.5;`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vTip; varying float vLush; varying float vHash; varying float vPatch;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        vec3 lushBase = vec3(0.035, 0.07, 0.02), lushTip = mix(vec3(0.20, 0.33, 0.07), vec3(0.30, 0.40, 0.10), vPatch);
+        // dry airfield grass: straw, olive and a few greener patches where the ground holds water
+        vec3 dryBase = vec3(0.09, 0.085, 0.04);
+        vec3 dryTip = mix(vec3(0.42, 0.36, 0.19), vec3(0.27, 0.30, 0.12), smoothstep(0.35, 0.8, vPatch));
+        vec3 base = mix(dryBase, lushBase, vLush), tipc = mix(dryTip, lushTip, vLush);
+        tipc *= 0.8 + vHash * 0.35;
+        diffuseColor.rgb = mix(base, tipc, smoothstep(0.0, 0.9, vTip));`);
+  };
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  mesh.userData.dynamic = true;
+  mesh.userData.u = u;
+  scene.add(mesh);
+  GRASS.layers.push(mesh);
+}
+function buildGrass(skyMesh) {
+  GRASS.skip = skyMesh;
+  GRASS.mask = grassMask();
+  // near: dense bent blades for the lawn walk and the apron; far: a wider carpet of simple blades out across the airfield
+  grassLayer(34, 22000, 0.42, 11, 4, true);
+  grassLayer(100, 45000, 0.5, 13, 4, false);
+  grassLayer(260, 80000, 0.6, 12, 3, false);
+}
+function updateGrass(now) {
+  for (const m of GRASS.layers) { m.userData.u.uCam.value.set(camera.position.x, camera.position.z); m.userData.u.uTime.value = now / 1000; }
 }
 
 /* ---------- Scroll ---------- */
@@ -3460,6 +3731,7 @@ function frame() {
     progressFill.style.transform = `scaleY(${clamp01(p).toFixed(4)})`;
   }
 
+  updateGrass(performance.now());
   renderer.render(scene, camera);
 }
 
