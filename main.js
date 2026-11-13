@@ -6,6 +6,12 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 /*
   AviationSpot360 Ground School: a scroll-driven walk from the campus forecourt,
@@ -1839,6 +1845,214 @@ function fuelTruck() {
   return g;
 }
 
+/* ---------- Camera finish, live sun shadows, haze: what makes it read as a photograph ---------- */
+// Each extra can be dropped on its own; QUALITY steps them down if a device can't keep up outdoors.
+const QUALITY = { ao: true, shadows: true, bloom: true };
+{ // contact shadows (GTAO) are the costliest extra: integrated and mobile GPUs start without them
+  const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+  const gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
+  if (/Intel|UHD|Iris|Mali|Adreno|PowerVR|SwiftShader/i.test(gpu)) QUALITY.ao = false;
+}
+let FX = null, SUN = null;
+/** fog that is warmer looking toward the low sun and cooler away from it, slightly denser near the ground */
+function patchFog() {
+  const v = SUN_VEC.clone().normalize(), sd = `vec3(${v.x.toFixed(4)}, ${v.y.toFixed(4)}, ${v.z.toFixed(4)})`;
+  THREE.ShaderChunk.fog_pars_vertex += '\n#ifdef USE_FOG\nvarying vec3 vFogDir;\n#endif\n';
+  THREE.ShaderChunk.fog_vertex += '\n#ifdef USE_FOG\nvFogDir = transpose(mat3(viewMatrix)) * mvPosition.xyz;\n#endif\n';
+  THREE.ShaderChunk.fog_pars_fragment += '\n#ifdef USE_FOG\nvarying vec3 vFogDir;\n#endif\n';
+  THREE.ShaderChunk.fog_fragment = `#ifdef USE_FOG
+    #ifdef FOG_EXP2
+      float fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );
+    #else
+      float fogFactor = smoothstep( fogNear, fogFar, vFogDepth );
+    #endif
+    vec3 fd = normalize( vFogDir );
+    float toSun = pow( max( dot( fd, ${sd} ), 0.0 ), 5.0 );
+    vec3 haze = fogColor * mix( vec3( 0.93, 0.95, 1.05 ), vec3( 1.22, 1.04, 0.86 ), toSun );
+    gl_FragColor.rgb = mix( gl_FragColor.rgb, haze, fogFactor * mix( 1.0, 0.86, smoothstep( 0.0, 0.3, fd.y ) ) );
+  #endif`;
+}
+const GradeShader = {
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uShimmer: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float uTime, uShimmer; varying vec2 vUv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main() {
+      vec2 uv = vUv;
+      // heat shimmer just above the horizon band, out on the airfield
+      float band = smoothstep(0.36, 0.46, uv.y) * (1.0 - smoothstep(0.5, 0.58, uv.y));
+      uv.x += sin(uv.y * 340.0 + uTime * 7.0) * 0.0007 * band * uShimmer;
+      vec3 c = texture2D(tDiffuse, uv).rgb;
+      float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c = mix(c, c * vec3(1.035, 0.995, 0.955), smoothstep(0.45, 1.0, l)); // warm highlights
+      c += vec3(0.010, 0.004, 0.018) * (1.0 - l);                          // mauve in the shadows
+      c = mix(vec3(l), c, 1.07);                                           // a touch more colour
+      float vig = smoothstep(1.1, 0.32, length((vUv - 0.5) * vec2(1.15, 1.0)));
+      c *= mix(0.8, 1.0, vig);
+      c += (hash(vUv * 1024.0 + fract(uTime) * 61.0) - 0.5) * 0.022;     // film grain
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+};
+function setupFX() {
+  const w = innerWidth, h = innerHeight;
+  const rt = new THREE.WebGLRenderTarget(w * pixelRatio, h * pixelRatio, { type: THREE.HalfFloatType, samples: 4 });
+  const composer = new EffectComposer(renderer, rt);
+  composer.setPixelRatio(pixelRatio);
+  composer.setSize(w, h);
+  composer.addPass(new RenderPass(scene, camera));
+  const gtao = new GTAOPass(scene, camera, w, h);
+  gtao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 1.4, thickness: 1.2, scale: 1.1, samples: 12 });
+  gtao.blendIntensity = 0.85;
+  composer.addPass(gtao);
+  gtao.setSize(w * pixelRatio * 0.5, h * pixelRatio * 0.5); // half resolution (after addPass, which sizes it full)
+  const bloom = new UnrealBloomPass(new THREE.Vector2(w / 2, h / 2), 0.32, 0.55, 0.92);
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+  const grade = new ShaderPass(GradeShader);
+  composer.addPass(grade);
+  FX = { composer, gtao, bloom, grade };
+}
+const SHADOW_HOME = { target: new THREE.Vector3(0, 0, 4), cam: { left: -26, right: 26, top: 14, bottom: -14, near: 10, far: 90 } };
+const _fwd = new THREE.Vector3();
+/** outdoors the sun's shadow map follows the camera, so aircraft, trucks, crew and trees cast long evening shadows */
+function updateSunShadow(outdoors) {
+  if (!SUN) return;
+  const c = SUN.shadow.camera;
+  if (QUALITY.shadows && outdoors > 0.5) {
+    camera.getWorldDirection(_fwd); _fwd.y = 0; _fwd.normalize();
+    const fx = Math.round((camera.position.x + _fwd.x * 50) / 4) * 4, fz = Math.round((camera.position.z + _fwd.z * 50) / 4) * 4;
+    SUN.target.position.set(fx, 0, fz);
+    SUN.position.copy(SUN_VEC).multiplyScalar(260).add(SUN.target.position);
+    SUN.target.updateMatrixWorld();
+    if (!SUN.userData.wide) {
+      Object.assign(c, { left: -80, right: 80, top: 80, bottom: -80, near: 1, far: 640 }); c.updateProjectionMatrix();
+      SUN.shadow.normalBias = 0.06;
+      SUN.userData.wide = true;
+      renderer.shadowMap.autoUpdate = true;
+    }
+  } else if (SUN.userData.wide) {
+    SUN.target.position.copy(SHADOW_HOME.target);
+    SUN.position.copy(SUN_VEC).multiplyScalar(48).add(SUN.target.position);
+    SUN.target.updateMatrixWorld();
+    Object.assign(c, SHADOW_HOME.cam); c.updateProjectionMatrix();
+    SUN.shadow.normalBias = 0.03;
+    SUN.userData.wide = false;
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = true;
+  }
+}
+/** let the models that arrive after load cast and take shadows (flat things and the vegetation carpets don't) */
+let castersAt = 0;
+const _box = new THREE.Box3();
+function refreshCasters(now) {
+  if (now < castersAt) return;
+  castersAt = now + 2500;
+  scene.traverse((o) => {
+    if (!o.isMesh || o.userData.castDone || !o.visible && !o.parent) return;
+    for (let a = o; a; a = a.parent) if (a.userData.noCast) return;
+    o.userData.castDone = true;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    _box.copy(o.geometry.boundingBox);
+    const sc = o.getWorldScale(_fwd), hgt = (_box.max.y - _box.min.y) * sc.y, wid = Math.max(_box.max.x - _box.min.x, _box.max.z - _box.min.z) * Math.max(sc.x, sc.z);
+    if (o.isInstancedMesh && wid < 5 && !o.userData.tree) return; // small instanced plants
+    if (hgt > 0.35 && wid < 900) { o.castShadow = true; o.receiveShadow = true; }
+  });
+}
+let qT = 16, qN = 0;
+function renderFrame(now, dt, outdoors, airside) {
+  if (!FX) { renderer.render(scene, camera); return; }
+  if (outdoors > 0.5 && document.visibilityState === 'visible') {
+    // adaptive: if the outdoor views run slow, shed the costliest extra first
+    qT = qT * 0.96 + Math.min(dt, 120) * 0.04;
+    if (++qN > 150 && qT > 34) {
+      if (QUALITY.ao) QUALITY.ao = false; else if (QUALITY.shadows) QUALITY.shadows = false; else if (QUALITY.bloom) QUALITY.bloom = false;
+      qN = 0; qT = 20;
+    }
+    refreshCasters(now);
+  }
+  FX.gtao.enabled = QUALITY.ao && outdoors > 0.5;
+  FX.bloom.enabled = QUALITY.bloom;
+  FX.grade.uniforms.uTime.value = (now / 1000) % 1000;
+  FX.grade.uniforms.uShimmer.value = airside;
+  updateSunShadow(outdoors);
+  FX.composer.render();
+}
+
+/* ---------- Wear: oil, rubber, the marks a working stand collects ---------- */
+let WEAR = null;
+function wearMats() {
+  if (WEAR) return WEAR;
+  const rnd = mulberry32(31);
+  const oil = canvasTex(256, 256, (g, w, h) => {
+    for (let i = 0; i < 26; i++) {
+      const x = w / 2 + (rnd() - 0.5) * w * 0.5, y = h / 2 + (rnd() - 0.5) * h * 0.5, r = 12 + rnd() * 55;
+      const gr = g.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, `rgba(18,16,14,${0.35 + rnd() * 0.35})`); gr.addColorStop(1, 'rgba(18,16,14,0)');
+      g.fillStyle = gr; g.beginPath(); g.ellipse(x, y, r, r * (0.6 + rnd() * 0.5), rnd() * 3, 0, Math.PI * 2); g.fill();
+    }
+  });
+  const streak = canvasTex(64, 512, (g, w, h) => {
+    for (let i = 0; i < 40; i++) {
+      const x = w * 0.15 + rnd() * w * 0.7, a = 0.05 + rnd() * 0.12;
+      g.fillStyle = `rgba(20,19,18,${a})`; g.fillRect(x, 0, 1 + rnd() * 3, h);
+    }
+    for (let i = 0; i < 30; i++) { g.fillStyle = `rgba(20,19,18,${0.05 + rnd() * 0.1})`; g.fillRect(rnd() * w, rnd() * h, 2 + rnd() * 10, 6 + rnd() * 50); }
+  });
+  streak.wrapS = streak.wrapT = THREE.RepeatWrapping;
+  const mk = (map, op) => new THREE.MeshStandardMaterial({ map, transparent: true, opacity: op, depthWrite: false, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -3 });
+  WEAR = { oil: mk(oil, 0.9), streak: mk(streak, 0.75), streakTex: streak };
+  return WEAR;
+}
+const decal = (w, d, mat, x, z, parent, rotZ = 0) => {
+  const m = panel(w, d, mat, x, 0.06, z, 'up', parent, { cast: false, receive: false });
+  m.rotation.z = rotZ; m.renderOrder = 1;
+  return m;
+};
+const CREW = {};
+function crewMats() {
+  if (CREW.vest) return CREW;
+  const std = (c, r = 0.8) => new THREE.MeshStandardMaterial({ color: c, roughness: r });
+  Object.assign(CREW, { vest: std(0xff8a1c, 0.6), vestY: std(0xd8e636, 0.6), pants: std(0x232a3a), skin: std(0x8a5a3c), helmet: std(0xf2f2ee, 0.5), stripe: std(0xdfe3e6, 0.3) });
+  return CREW;
+}
+/** a ground-crew figure, 1.75 m: hi-vis vest, reflective band, helmet */
+function crewman(yellow = false, wands = false) {
+  const C = crewMats(), g = new THREE.Group(), vest = yellow ? C.vestY : C.vest;
+  for (const sx of [-0.1, 0.1]) box(0.15, 0.84, 0.17, C.pants, sx, 0.42, 0, g);
+  box(0.42, 0.6, 0.24, vest, 0, 1.15, 0, g);
+  box(0.43, 0.05, 0.25, C.stripe, 0, 1.0, 0, g);
+  for (const sx of [-0.28, 0.28]) box(0.1, 0.56, 0.11, vest, sx, 1.13, 0, g);
+  mesh(new THREE.SphereGeometry(0.11, 10, 8), C.skin, 0, 1.58, 0, g);
+  mesh(new THREE.SphereGeometry(0.125, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), C.helmet, 0, 1.62, 0, g);
+  if (wands) for (const sx of [-0.4, 0.4]) { const w = box(0.04, 0.4, 0.04, new THREE.MeshBasicMaterial({ color: 0xff5a1a }), sx, 1.55, 0.05, g); w.rotation.z = sx * 0.8; }
+  return g;
+}
+/** oil under the engines and gear, tyre tracks into the stand, and the crew working the turnaround */
+function wearAndCrew(x, zc, dir, parent, { crew = 5 } = {}) {
+  const W = wearMats(), nose = zc + dir * 18.8, left = dir;
+  for (const s of [-1, 1]) decal(4.5, 4.5, W.oil, x + s * 5.8, zc + dir * 4.5, parent, s);
+  decal(3, 2.6, W.oil, x, nose - dir * 5.2, parent, 0.7);
+  decal(2.5, 2.5, W.oil, x, zc - dir * 16, parent, 2);
+  for (const sx of [-3.8, 3.8]) decal(1.3, 46, W.streak, x + sx, zc - dir * 22, parent);
+  decal(0.9, 44, W.streak, x, nose - dir * 27, parent);
+  const spots = [[x, nose + dir * 9, dir > 0 ? Math.PI : 0, true], [x - left * 4.4, nose - dir * 10, 0, false],
+    [x + left * 9.5, nose - dir * 3.5, Math.PI / 2, false], [x - left * 5.6, nose - dir * 1.2, -Math.PI / 2, false], [x + left * 19, zc, 0, false]];
+  spots.slice(0, crew).forEach(([px, pz, yaw, wands], i) => {
+    const c = crewman(i % 2 === 1, wands);
+    c.position.set(px, 0, pz); c.rotation.y = yaw + (i ? (mulberry32(i * 7 + x)() - 0.5) : 0);
+    parent.add(c);
+  });
+}
+function van() {
+  const g = new THREE.Group(), white = new THREE.MeshStandardMaterial({ color: 0xeceae6, roughness: 0.6 });
+  box(5.2, 2.3, 2.0, white, 0, 1.45, 0, g);
+  box(1.2, 1.0, 1.96, M.darkGlass, 2.2, 1.9, 0, g);
+  box(5.22, 0.3, 2.02, new THREE.MeshStandardMaterial({ color: 0xff8a1c, roughness: 0.6 }), 0, 1.0, 0, g);
+  for (const sx of [-1.7, 1.7]) for (const sz of [-0.95, 0.95]) cyl(0.36, 0.36, 0.25, M.leather, sx, 0.36, sz, g, 12).rotation.x = Math.PI / 2;
+  blinker(mesh(new THREE.SphereGeometry(0.1, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffa21a }), 1.6, 2.68, 0, g), 0.8, 0.2, 0.4);
+  return g;
+}
+
 /* ---------- Ground support equipment and jet bridges (sizes from real A320 turnarounds) ---------- */
 let GSEM = null;
 function gseMats() {
@@ -1990,6 +2204,7 @@ function turnaround(x, z, dir, standNo, parent, { bus = true } = {}) {
   put(standBoard(standNo), x + 4, nose + dir * 12, dir > 0 ? 0 : Math.PI);
   const G = gseMats();
   for (const s of [-1, 1]) box(0.25, 0.2, 0.4, G.yellow, x + s * 0.5, 0.1, nose - dir * 5.2, parent); // nose-gear chocks
+  wearAndCrew(x, z, dir, parent);
   for (const s of [-1, 1]) box(0.6, 0.25, 0.3, G.yellow, x + s * 3.8, 0.12, z - dir * 0.6, parent); // main-gear chocks
   // stand safety lines: red equipment-restraint box and a white walkway at the forward door
   box(48, 0.01, 0.3, G.red, x, 0.036, nose + dir * 2, parent, { cast: false });
@@ -2484,6 +2699,8 @@ function buildAirside() {
   }
   // taxiway and apron paint
   box(1460, 0.01, 0.3, yellow, 0, 0.04, TWY_Z, air, { cast: false });
+  { const W = wearMats(), st = W.streak.clone(); st.map = W.streakTex.clone(); st.map.repeat.set(1, 1460 / 40); st.opacity = 0.55;
+    decal(3.2, 1460, st, 0, TWY_Z, air, Math.PI / 2); }
   box(520, 0.01, 0.3, yellow, 0, 0.035, -104, air, { cast: false });
   for (const x of route.conn) box(0.3, 0.01, Math.abs(RWY_Z - TWY_Z), yellow, x, 0.04, (RWY_Z + TWY_Z) / 2, air, { cast: false });
   for (const x of route.conn) holdLine(x, RWY_Z + 90, -1, yellow, air);
@@ -2623,6 +2840,15 @@ function buildAirside() {
   air.add(car);
   const carPath = new THREE.CatmullRomCurve3([[170, -31.2], [0, -31.2], [-170, -31.2], [-177, -33.2], [-170, -35.2], [0, -35.2], [170, -35.2], [177, -33.2]].map(([x, z]) => new THREE.Vector3(x, 0, z)), true, 'centripetal');
   AIRSIDE.vehicles.push({ g: car, path: carPath, speed: 9, phase: 0 });
+  for (const [mk, sp] of [[() => apronBus(), 7], [van, 8.5], [van, 10]]) {
+    const v = bakeGroup(mk()); v.userData.dynamic = true; air.add(v);
+    AIRSIDE.vehicles.push({ g: v, path: carPath, speed: sp, phase: 0, t0: AIRSIDE.vehicles.length * 23 });
+  }
+  for (const [x, z] of [[-125, -80], [-70, -78], [-15, -82]]) {
+    const loop = new THREE.CatmullRomCurve3([[x + 6, z + 8], [x + 12, z - 6], [x - 6, z - 10], [x - 9, z + 6]].map(([a, b]) => new THREE.Vector3(a, 0, b)), true);
+    const c = crewman(x > -50); c.userData.dynamic = true; air.add(c);
+    AIRSIDE.vehicles.push({ g: c, path: loop, speed: 1.3, phase: 0, t0: x });
+  }
   const train = tugTrain().map((p) => { const b = bakeGroup(p); b.userData.dynamic = true; air.add(b); return b; });
   AIRSIDE.vehicles.push({ train, cx: -70, cz: -59, rx: 48, rz: 4.5, speed: 5 });
 
@@ -2693,6 +2919,7 @@ function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
       if (o.userData.isCater) gseSpot(o, 'cater');
     }
     box(0.6, 0.25, 0.3, G.yellow, gx, 0.12, nz + 5, term);
+    wearAndCrew(gx, jz, -1, term, { crew: 3 });
     const jet = bakeGroup(airliner({ tail: M.paintNavy, gear: true }));
     jet.scale.setScalar(40);
     jet.position.set(gx, 4.2, jz);
@@ -2821,7 +3048,7 @@ function updateAirside(now) {
       v.circuit.position.set(v.cx + Math.cos(a) * v.rx, v.alt + Math.sin(a * 2) * 12, v.cz + Math.sin(a) * v.rz);
       v.circuit.rotation.set(-0.3, Math.atan2(-Math.cos(a) * v.rz, -Math.sin(a) * v.rx), 0);
     } else if (v.path) {
-      const u = ((t * v.speed) / v.path.getLength()) % 1;
+      const u = (((((t + (v.t0 || 0)) * v.speed) / v.path.getLength()) % 1) + 1) % 1;
       const p = v.path.getPointAt(u), d = v.path.getTangentAt(u);
       v.g.position.copy(p);
       v.g.rotation.y = Math.atan2(-d.z, d.x);
@@ -2992,6 +3219,7 @@ function progressToU(p) {
 /* ---------- Boot ---------- */
 let T, M, hemi;
 async function init() {
+  patchFog();
   window.__boot = Math.round(performance.now());
   try { await Promise.all([FONT(500, 64), FONT(600, 30), FONT(500, 64, DISPLAY), FONT(700, 27)].map((f) => document.fonts.load(f))); } catch (e) { /* fall back to system fonts */ }
   let logoImg;
@@ -3018,6 +3246,7 @@ async function init() {
   sun.shadow.bias = -0.0005;
   sun.shadow.normalBias = 0.03;
   scene.add(sun);
+  SUN = sun;
 
   buildExterior();
   mark('exterior');
@@ -3047,7 +3276,8 @@ async function init() {
   renderer.shadowMap.autoUpdate = false; // nothing that casts shadows moves, so bake them once
   renderer.shadowMap.needsUpdate = true;
 
-  window.__cc = { renderer, scene, camera, AIRSIDE, look: (x, y, z) => roomCam.look.set(x, y, z), view: (p, l) => { mode = "moving"; roomCam.pos.set(...p); roomCam.look.set(...l); }, setP: (v) => { targetP = p = v; } }; // debug handle
+  setupFX();
+  window.__cc = { get FX() { return FX; }, QUALITY, renderer, scene, camera, AIRSIDE, look: (x, y, z) => roomCam.look.set(x, y, z), view: (p, l) => { mode = "moving"; roomCam.pos.set(...p); roomCam.look.set(...l); }, setP: (v) => { targetP = p = v; } }; // debug handle
   setupScroll();
   onResize();
   // ?p=0.5 jumps the walk to that point (handy for screenshots)
@@ -3165,8 +3395,9 @@ function plantInstances(piece, pts, parent, rng, [s0, s1] = [0.8, 1.3], sink = 0
     im.setMatrixAt(i, d.matrix);
   });
   im.computeBoundingSphere();
-  im.castShadow = false; im.receiveShadow = false;
+  im.castShadow = false; im.receiveShadow = true;
   im.userData.dynamic = true;
+  im.userData.noCast = true;
   parent.add(im);
   return im;
 }
@@ -3231,11 +3462,12 @@ async function loadVegetation() {
       const m = o.material.clone();
       m.side = THREE.DoubleSide; m.transparent = false; m.alphaTest = 0.5;
       if ('roughness' in m) { m.roughness = 0.9; m.metalness = 0; }
-      if (/leaf/i.test(m.name)) m.color.set(0x7d9a52); // a deeper summer green than the pale scan
+      if (/leaf/i.test(m.name)) { m.color.set(0x6f8f48); m.alphaTest = 0.55; m.alphaToCoverage = true; } // deeper green, soft card edges
       const im = new THREE.InstancedMesh(g, m, mats.length);
       mats.forEach((mx, i) => im.setMatrixAt(i, mx));
       im.computeBoundingSphere();
       im.userData.dynamic = true;
+      im.userData.tree = true;
       scene.add(im);
     });
   }
@@ -3364,6 +3596,7 @@ function buildCity(air) {
     });
     near.computeBoundingSphere();
     near.userData.dynamic = true;
+    near.userData.noCast = true;
     scene.add(near); // landside and airside both see them
   });
 }
@@ -3527,6 +3760,8 @@ function grassLayer(size, count, height, seed, blades, detailed) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
   mesh.userData.dynamic = true;
+  mesh.userData.noCast = true;
+  mesh.receiveShadow = true;
   mesh.userData.u = u;
   scene.add(mesh);
   GRASS.layers.push(mesh);
@@ -3821,7 +4056,7 @@ function frame() {
   if (DESK_ENGINE.mixer && camera.position.z < -14 && camera.position.x > 0) DESK_ENGINE.mixer.update(Math.min(dt, 100) / 1000);
   if (document.visibilityState === 'visible' && ++frames > 30 && frames < 240) {
     slowTime = slowTime * 0.9 + dt * 0.1;
-    if (frames === 239 && slowTime > 26 && pixelRatio > 0.9) { pixelRatio = Math.max(0.85, pixelRatio * 0.7); renderer.setPixelRatio(pixelRatio); renderer.setSize(innerWidth, innerHeight, false); }
+    if (frames === 239 && slowTime > 26 && pixelRatio > 0.9) { pixelRatio = Math.max(0.85, pixelRatio * 0.7); renderer.setPixelRatio(pixelRatio); renderer.setSize(innerWidth, innerHeight, false); if (FX) { FX.composer.setPixelRatio(pixelRatio); FX.composer.setSize(innerWidth, innerHeight); } }
   }
   p += (targetP - p) * (reduceMotion ? 1 : 0.14);
   const u = progressToU(clamp01(p));
@@ -3844,8 +4079,9 @@ function frame() {
   scene.fog.far = 150 + out * 1500;
   // outdoors (the forecourt, the apron) the sky does most of the lighting at sunset; indoors it only tints reflections
   const outdoors = Math.max(out, range(camera.position.z, -0.5, 3.5));
-  scene.environmentIntensity = 0.3 + 0.75 * outdoors;
-  if (hemi) hemi.intensity = 0.55 + 0.45 * outdoors;
+  scene.environmentIntensity = 0.3 + 0.55 * outdoors;
+  if (hemi) hemi.intensity = 0.55 + 0.15 * outdoors;
+  if (SUN) SUN.intensity = 1.7 + 0.9 * outdoors; // outdoors the low sun is the key light: shadows that read
   const near = camera.position.z < -25.5 ? 0.3 : 0.05;
   if (camera.near !== near) { camera.near = near; camera.updateProjectionMatrix(); }
   if (AIRSIDE.root) updateAirside(now);
@@ -3897,8 +4133,8 @@ function frame() {
     progressFill.style.transform = `scaleY(${clamp01(p).toFixed(4)})`;
   }
 
-  updateGrass(performance.now());
-  renderer.render(scene, camera);
+  updateGrass(now);
+  renderFrame(now, dt, outdoors, out);
 }
 
 function onResize() {
@@ -3918,6 +4154,7 @@ function onResize() {
     if (M) uDoor = computeDoorU();
   }
   renderer.setSize(w, h, false);
+  if (FX) { FX.composer.setPixelRatio(pixelRatio); FX.composer.setSize(w, h); FX.gtao.setSize(w * pixelRatio * 0.5, h * pixelRatio * 0.5); }
   ScrollTrigger.refresh();
 }
 addEventListener('resize', onResize);
