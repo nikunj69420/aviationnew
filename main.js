@@ -1883,7 +1883,7 @@ const GradeShader = {
       float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
       c = mix(c, c * vec3(1.035, 0.995, 0.955), smoothstep(0.45, 1.0, l)); // warm highlights
       c += vec3(0.010, 0.004, 0.018) * (1.0 - l);                          // mauve in the shadows
-      c = mix(c, c * c * (3.0 - 2.0 * c), 0.4);                           // a soft S-curve: AgX alone is flat
+      c = mix(c, c * c * (3.0 - 2.0 * c), 0.25);                           // a soft S-curve: AgX alone is flat
       c = mix(vec3(l), c, 1.1);                                            // and a little colour back
       float vig = smoothstep(1.1, 0.32, length((vUv - 0.5) * vec2(1.15, 1.0)));
       c *= mix(0.8, 1.0, vig);
@@ -3333,7 +3333,7 @@ async function init() {
   // Sunset: lavender sky fill, low amber sun raking across the facade from the west
   hemi = new THREE.HemisphereLight(0xb497c6, 0x3d2c2e, 0.6); // lavender-pink sky fill
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xff9f72, 1.7); // warm low sun
+  const sun = new THREE.DirectionalLight(0xffb48c, 1.7); // a soft, low evening sun
   sun.target.position.set(0, 0, 4);
   sun.position.copy(SUN_VEC).multiplyScalar(48).add(sun.target.position); // where the photographed sun sets
   scene.add(sun.target);
@@ -3342,6 +3342,7 @@ async function init() {
   Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 14, bottom: -14, near: 10, far: 90 });
   sun.shadow.bias = -0.0005;
   sun.shadow.normalBias = 0.03;
+  sun.shadow.radius = 5; // soft-edged shadows, as hazy evening light gives
   scene.add(sun);
   SUN = sun;
 
@@ -4418,10 +4419,10 @@ function frame() {
   scene.fog.far = 150 + out * 1500;
   // outdoors (the forecourt, the apron) the sky does most of the lighting at sunset; indoors it only tints reflections
   const outdoors = Math.max(out, range(camera.position.z, -0.5, 3.5));
-  scene.environmentIntensity = 0.3 + 0.4 * outdoors;
-  if (hemi) hemi.intensity = 0.55 - 0.25 * outdoors; // less flat fill outside: let the sun and its shadows shape things
-  if (SUN) SUN.intensity = 1.7 + 1.5 * outdoors; // outdoors the low sun is the key light: shadows that read
-  renderer.toneMappingExposure = 1.15 - 0.1 * outdoors; // a camera stops down outside (AgX sits darker than ACES)
+  scene.environmentIntensity = 0.3 + 0.5 * outdoors;
+  if (hemi) hemi.intensity = 0.55 - 0.1 * outdoors; // at sunset the sky does most of the lighting
+  if (SUN) SUN.intensity = 1.7 - 0.6 * outdoors; // a sun this low is weak: a gentle warm rim and long soft shadows, no glare
+  renderer.toneMappingExposure = 1.12 - 0.08 * outdoors; // a camera stops down outside (AgX sits darker than ACES)
   const near = camera.position.z < -25.5 ? 0.3 : 0.05;
   if (camera.near !== near) { camera.near = near; camera.updateProjectionMatrix(); }
   if (AIRSIDE.root) updateAirside(now);
