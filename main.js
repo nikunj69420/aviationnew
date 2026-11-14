@@ -43,7 +43,7 @@ let pixelRatio = Math.min(devicePixelRatio, 1.5);
 renderer.setPixelRatio(pixelRatio);
 renderer.setSize(innerWidth, innerHeight, false);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMapping = THREE.AgXToneMapping; // a camera-like curve: bright colours roll off instead of going candy
 renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -1883,7 +1883,8 @@ const GradeShader = {
       float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
       c = mix(c, c * vec3(1.035, 0.995, 0.955), smoothstep(0.45, 1.0, l)); // warm highlights
       c += vec3(0.010, 0.004, 0.018) * (1.0 - l);                          // mauve in the shadows
-      c = mix(vec3(l), c, 1.07);                                           // a touch more colour
+      c = mix(c, c * c * (3.0 - 2.0 * c), 0.4);                           // a soft S-curve: AgX alone is flat
+      c = mix(vec3(l), c, 1.1);                                            // and a little colour back
       float vig = smoothstep(1.1, 0.32, length((vUv - 0.5) * vec2(1.15, 1.0)));
       c *= mix(0.8, 1.0, vig);
       c += (hash(vUv * 1024.0 + fract(uTime) * 61.0) - 0.5) * 0.022;     // film grain
@@ -2295,7 +2296,7 @@ function loadAirModel(key) {
       o.castShadow = false;
       for (const m of [].concat(o.material)) {
         if (sp.fullColour) m.color?.setScalar(1); // the A320 export darkens its livery
-        if ('roughness' in m) { m.roughness = Math.max(m.roughness ?? 1, 0.55); m.metalness = Math.min(m.metalness ?? 0, 0.15); }
+        if ('roughness' in m) { m.roughness = sp.livery || sp.fullColour ? 0.42 : Math.max(m.roughness ?? 1, 0.55); m.metalness = Math.min(m.metalness ?? 0, 0.15); } // aircraft paint has a sheen
       }
     });
     const inner = new THREE.Group();
@@ -2315,12 +2316,15 @@ function loadAirModel(key) {
 // each model swaps in on its own as soon as it arrives (the A320 is small, the Cessna is the heaviest)
 const airModels = Object.fromEntries(Object.keys(MODEL_SPECS).map((k) => [k, loadAirModel(k).catch((e) => { console.warn('model', k, e); return null; })]));
 // Terminal 3's pier from the VIDP scenery (converted from its MSFS model library), in metres as built
-airModels.t3 = gltfLoader.loadAsync('models/vidp_t3.glb?v=4').then((gltf) => {
+airModels.t3 = gltfLoader.loadAsync('models/vidp_t3.glb?v=5').then((gltf) => {
   const root = gltf.scene;
   root.traverse((o) => {
     if (!o.isMesh) return;
     o.castShadow = o.receiveShadow = false;
-    for (const m of [].concat(o.material)) if ('roughness' in m) { m.roughness = Math.max(m.roughness ?? 1, 0.6); m.metalness = Math.min(m.metalness ?? 0, 0.3); }
+    for (const m of [].concat(o.material)) if ('roughness' in m) {
+      m.roughness = Math.max(m.roughness ?? 1, 0.6); m.metalness = Math.min(m.metalness ?? 0, 0.3);
+      if (m.emissiveMap) m.emissiveIntensity = 0.7; // the scenery's night-light textures: interiors lit for dusk
+    }
   });
   root.rotation.y = T3P.rot;
   root.position.set(T3P.tx, 0.03, T3P.tz);
@@ -2728,7 +2732,8 @@ function buildAirside() {
     box(4, 0.6, 0.8, M.metalDark, x, 24.2, -112, air);
     box(3.6, 0.1, 0.6, M.lightWarm, x, 23.85, -111.9, air, { cast: false, receive: false });
   }
-  glowPoints([-190, -95, 0, 95, 190].map((x) => [x, 23.8, -111.4]), 0xffd9a6, 9);
+  glowPoints([-190, -95, 0, 95, 190].map((x) => [x, 23.8, -111.4]), 0xffd9a6, 4.5);
+  for (const x of [-190, -95, 0, 95, 190]) lightPool(x, -92, 80, 62, air, 0.3);
 
   // control tower, off to the west, by the sunset
   const tx = -260, tz = -175;
@@ -2858,6 +2863,84 @@ function buildAirside() {
 /** Across the runway, after Delhi IGI's layout: a parallel taxiway, a T3-style terminal with jet bridges and gates,
     a second parallel runway lit for the evening, then the olive scrub and the hazy city edge. (Layout studied from
     satellite views as reference only; nothing is traced or copied from them.) */
+/** the pool of light a lamp throws on the ground: an additive warm disc (real lights for hundreds of lamps would be too slow) */
+let POOL = null;
+function lightPool(x, z, w, d, parent, strength = 0.3, y = 0.075) {
+  POOL ??= canvasTex(128, 128, (g, s) => {
+    const r = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    r.addColorStop(0, 'rgba(255,214,160,1)'); r.addColorStop(0.35, 'rgba(255,200,140,0.5)'); r.addColorStop(1, 'rgba(255,190,120,0)');
+    g.fillStyle = r; g.fillRect(0, 0, s, s);
+  });
+  const key = strength.toFixed(2);
+  lightPool.mats ??= {};
+  const mat = lightPool.mats[key] ??= new THREE.MeshBasicMaterial({ map: POOL, transparent: true, opacity: strength, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
+  const m = panel(w, d, mat, x, y, z, 'up', parent, { cast: false, receive: false });
+  m.renderOrder = 2;
+  return m;
+}
+/** apron paint, as ICAO Annex 14 and Indian aprons draw it: black-bordered yellow guidance lines, red safety lines */
+function apronPaint(yellow, white) {
+  const black = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.9 });
+  const red = new THREE.MeshStandardMaterial({ color: 0xb3262b, roughness: 0.85 });
+  const hatch = new THREE.MeshStandardMaterial({ transparent: true, depthWrite: false, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -2,
+    map: canvasTex(256, 256, (g, w, h) => {
+      g.strokeStyle = '#b3262b'; g.lineWidth = 14;
+      for (let i = -h; i < w + h; i += 52) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + h, h); g.stroke(); }
+      g.lineWidth = 18; g.strokeRect(0, 0, w, h);
+    }) });
+  hatch.map.wrapS = hatch.map.wrapT = THREE.RepeatWrapping;
+  const line = (x0, z0, x1, z1, wdt, mat, y = 0.04, parent) => {
+    const len = Math.hypot(x1 - x0, z1 - z0);
+    const m = box(len, 0.008, wdt, mat, (x0 + x1) / 2, y, (z0 + z1) / 2, parent || AIRSIDE.root, { cast: false });
+    m.rotation.y = Math.atan2(-(z1 - z0), x1 - x0);
+    return m;
+  };
+  const guide = (x0, z0, x1, z1, parent) => { line(x0, z0, x1, z1, 0.6, black, 0.036, parent); line(x0, z0, x1, z1, 0.26, yellow, 0.041, parent); };
+  const arc = (cx, cz, r, a0, a1, parent) => {
+    const n = 9;
+    for (let i = 0; i < n; i++) {
+      const a = a0 + (a1 - a0) * (i / n), b = a0 + (a1 - a0) * ((i + 1) / n);
+      guide(cx + Math.cos(a) * r, cz + Math.sin(a) * r, cx + Math.cos(b) * r, cz + Math.sin(b) * r, parent);
+    }
+  };
+  /** one nose-in stand: nose at (gx, nz), aircraft running toward +z, taxiway centreline at z = twz */
+  const stand = (gx, nz, twz, no, { rot, bay, zebraZ }, parent) => {
+    const R = 24, stop = nz + 5.2;
+    guide(gx, stop - 1.5, gx, twz - R, parent);                         // lead-in line
+    arc(gx + R, twz - R, R, Math.PI, Math.PI / 2, parent);              // turn-ins from both directions
+    arc(gx - R, twz - R, R, 0, Math.PI / 2, parent);
+    for (const [dz, wd] of [[0, 4.2], [2.6, 2.6], [5.4, 2.6]]) {        // nose-wheel stop bars, by aircraft type
+      line(gx - wd / 2, stop + dz, gx + wd / 2, stop + dz, 0.5, black, 0.037, parent);
+      line(gx - wd / 2, stop + dz, gx + wd / 2, stop + dz, 0.24, yellow, 0.042, parent);
+    }
+    // the stand number, read by a pilot turning in from the taxiway
+    const num = canvasTex(256, 160, (g, w, h) => {
+      g.fillStyle = '#141414'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#e3b62b'; g.font = FONT(800, 120); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(no, w / 2, h / 2 + 8);
+    });
+    const nm = panel(5.6, 3.5, new THREE.MeshStandardMaterial({ map: num, roughness: 0.85 }), gx + 4.2, 0.043, twz - R - 12, 'up', parent, { cast: false, receive: false });
+    nm.renderOrder = 1;
+    // red stand safety lines round the aircraft's envelope
+    const x0 = gx - 22, x1 = gx + 22, zf = nz - 2.5, zb = twz - 15;
+    line(x0, zf, x1, zf, 0.2, red, 0.039, parent); line(x0, zf, x0, zb, 0.2, red, 0.039, parent); line(x1, zf, x1, zb, 0.2, red, 0.039, parent);
+    // keep-clear hatching under the jet bridge's sweep
+    if (rot) {
+      const [rx, rz] = rot, dx = gx - 2.4 - rx, dz = nz + 4.6 - rz, len = Math.hypot(dx, dz) + 5;
+      const hm = hatch.clone(); hm.map = hatch.map.clone(); hm.map.repeat.set(len / 4, 2);
+      const h = panel(len, 8, hm, rx + dx / 2, 0.045, rz + dz / 2, 'up', parent, { cast: false, receive: false });
+      h.rotation.z = Math.atan2(-dz, dx); h.renderOrder = 1;
+    }
+    // an equipment bay between this stand and the next, and a zebra crossing on the service road
+    if (bay !== null) {
+      const bz0 = nz + 3, bz1 = nz + 17, b0 = bay - 3.2, b1 = bay + 3.2;
+      for (const [a, b, c, d] of [[b0, bz0, b1, bz0], [b0, bz1, b1, bz1], [b0, bz0, b0, bz1], [b1, bz0, b1, bz1]]) line(a, b, c, d, 0.15, white, 0.039, parent);
+      line(b0, bz0, b1, bz1, 0.12, white, 0.039, parent);
+      for (let k = -3; k <= 3; k++) line(bay + k * 1.0, zebraZ - 3.6, bay + k * 1.0, zebraZ + 3.6, 0.5, white, 0.04, parent);
+    }
+  };
+  return { line, guide, arc, stand, white, red, black };
+}
+
 // where the VIDP T3 pier model sits: model metres turned about y, then moved (see buildFarField)
 const T3P = { rot: -2.1006, tx: 537.6, tz: -879.9 };
 function t3xz(x, z) { const c = Math.cos(T3P.rot), s = Math.sin(T3P.rot); return [x * c + z * s + T3P.tx, -x * s + z * c + T3P.tz]; }
@@ -2883,10 +2966,24 @@ function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
   const ws = W.map(([x, z]) => t3xz(x, z)), ds = D.map(([x, z]) => t3xz(x, z));
   const fx0 = Math.min(...ws.map((w) => w[0])) - 40, fx1 = Math.max(...ws.map((w) => w[0])) + 40, face = ws.reduce((a, w) => a + w[1], 0) / ws.length;
   const apron2 = apronMat.clone();
-  apron2.map = repeatOf(apronMat.map, (fx1 - fx0) / 24, 90 / 24);
+  apron2.map = repeatOf(apronMat.map, (fx1 - fx0) / 24, 97 / 24);
   CONCRETE_GROUND.push(apron2);
-  panel(fx1 - fx0, 90, apron2, (fx0 + fx1) / 2, 0.02, face + 45, 'up', air);
-  box(fx1 - fx0, 0.01, 0.3, yellow, (fx0 + fx1) / 2, 0.035, face + 82, air, { cast: false });
+  panel(fx1 - fx0, 97, apron2, (fx0 + fx1) / 2, 0.02, face + 48.5, 'up', air);
+  const PM = apronPaint(yellow, white);
+  // head-of-stand service road between the pier and the aircraft noses, passing under the bridges
+  for (const dz of [14, 22]) PM.line(fx0 + 6, face + dz, fx1 - 6, face + dz, 0.15, PM.white);
+  for (let x = fx0 + 8; x < fx1 - 8; x += 6) PM.line(x, face + 18, x + 3, face + 18, 0.12, PM.white);
+  // flood masts along the pier, one between each pair of stands
+  const mastGlow = [];
+  for (let i = 0; i < ws.length - 1; i++) {
+    const mx = (ws[i][0] + ws[i + 1][0]) / 2;
+    cyl(0.22, 0.38, 26, M.metalDark, mx, 13, face + 3, air, 10);
+    box(4.2, 0.7, 1.0, M.metalDark, mx, 26.2, face + 3.3, air);
+    box(3.8, 0.1, 0.7, M.lightWarm, mx, 25.82, face + 3.5, air, { cast: false, receive: false });
+    mastGlow.push([mx, 25.8, face + 3.9]);
+  }
+  glowPoints(mastGlow, 0xffe0b0, 4.5, air);
+  for (const [mx] of mastGlow) lightPool(mx, face + 22, 78, 60, air, 0.3);
 
   // a stand-in hall until the pier model arrives
   const hall = new THREE.Group();
@@ -2907,7 +3004,7 @@ function buildFarField(air, { white, yellow, tarmacAt, apronMat }) {
   const term = new THREE.Group();
   ds.forEach(([gx, nz], i) => {
     const jz = nz + 18.8, wx = ws[i][0];
-    box(0.3, 0.01, 44, yellow, gx, 0.035, jz + 4, air, { cast: false });
+    PM.stand(gx, nz, FTW, `${46 + i * 2}`, { rot: [wx - 6, face + 6], bay: i < ds.length - 1 ? (gx + ds[i + 1][0]) / 2 : null, zebraZ: face + 18 }, air);
     if (i === 4) { jetBridge(wx - 6, face + 6, wx - 2, face + 14, 3.4, term); return; } // stand 54 empty, bridge parked
     jetBridge(wx - 6, face + 6, gx - 2.4, nz + 4.6, 3.4, term);
     const G = gseMats();
@@ -3236,7 +3333,7 @@ async function init() {
   // Sunset: lavender sky fill, low amber sun raking across the facade from the west
   hemi = new THREE.HemisphereLight(0xb497c6, 0x3d2c2e, 0.6); // lavender-pink sky fill
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffa98e, 1.7); // rose-gold low sun
+  const sun = new THREE.DirectionalLight(0xff9f72, 1.7); // warm low sun
   sun.target.position.set(0, 0, 4);
   sun.position.copy(SUN_VEC).multiplyScalar(48).add(sun.target.position); // where the photographed sun sets
   scene.add(sun.target);
@@ -3489,12 +3586,12 @@ const IGI_FREE = [
   ['vidp_atcgp1', -560, -830, T3P.rot, 0.95], ['vidp_atcgp2', -390, -700, T3P.rot, 0.783],
 ];
 async function loadIGI() {
-  const load = (f) => gltfLoader.loadAsync(`models/${f}.glb`).then((g) => g.scene).catch((e) => { console.warn('igi', f, e); return null; });
+  const load = (f) => gltfLoader.loadAsync(`models/${f}.glb?v=2`).then((g) => g.scene).catch((e) => { console.warn('igi', f, e); return null; });
   const prep = (root) => {
     root.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = o.receiveShadow = false;
-      for (const m of [].concat(o.material)) if ('roughness' in m) { m.roughness = Math.max(m.roughness ?? 1, 0.6); m.metalness = Math.min(m.metalness ?? 0, 0.3); }
+      for (const m of [].concat(o.material)) if ('roughness' in m) { m.roughness = Math.max(m.roughness ?? 1, 0.6); m.metalness = Math.min(m.metalness ?? 0, 0.3); if (m.emissiveMap) m.emissiveIntensity = 0.7; }
     });
     root.userData.dynamic = true;
     return root;
@@ -3743,7 +3840,8 @@ function buildConnaught() {
   // lamps along both pavements and down the wings
   for (let x = -122; x <= 122; x += 17) { if (Math.abs(x) > 6) cpLamp(x, ROAD.z - ROAD.half - 0.7); cpLamp(x + 8.5, ROAD.z + ROAD.half + 0.7); }
   for (const sx of [-1, 1]) for (let z = -16; z <= 24; z += 13) cpLamp(sx * 27.4, z, false);
-  glowPoints(CP_GLOW, 0xffd9a6, 1.6, scene);
+  glowPoints(CP_GLOW, 0xffd9a6, 1.2, scene);
+  for (const [x, y, z] of CP_GLOW) lightPool(x, z, y > 4.2 ? 6 : 11, y > 4.2 ? 6 : 11, scene, y > 4.2 ? 0.35 : 0.22, y > 4.2 ? 0.32 : 0.02);
 }
 
 /* ---------- The street outside the gate: pavements, median, autos, a bhel-puri cart ---------- */
@@ -4320,10 +4418,10 @@ function frame() {
   scene.fog.far = 150 + out * 1500;
   // outdoors (the forecourt, the apron) the sky does most of the lighting at sunset; indoors it only tints reflections
   const outdoors = Math.max(out, range(camera.position.z, -0.5, 3.5));
-  scene.environmentIntensity = 0.3 + 0.55 * outdoors;
-  if (hemi) hemi.intensity = 0.55 + 0.15 * outdoors;
-  if (SUN) SUN.intensity = 1.7 + 0.45 * outdoors; // outdoors the low sun is the key light: shadows that read
-  renderer.toneMappingExposure = 0.92 - 0.1 * outdoors; // a camera stops down outside
+  scene.environmentIntensity = 0.3 + 0.4 * outdoors;
+  if (hemi) hemi.intensity = 0.55 - 0.25 * outdoors; // less flat fill outside: let the sun and its shadows shape things
+  if (SUN) SUN.intensity = 1.7 + 1.5 * outdoors; // outdoors the low sun is the key light: shadows that read
+  renderer.toneMappingExposure = 1.15 - 0.1 * outdoors; // a camera stops down outside (AgX sits darker than ACES)
   const near = camera.position.z < -25.5 ? 0.3 : 0.05;
   if (camera.near !== near) { camera.near = near; camera.updateProjectionMatrix(); }
   if (AIRSIDE.root) updateAirside(now);
