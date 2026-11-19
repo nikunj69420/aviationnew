@@ -1975,7 +1975,7 @@ function refreshCasters(now) {
     _box.copy(o.geometry.boundingBox);
     const sc = o.getWorldScale(_fwd), hgt = (_box.max.y - _box.min.y) * sc.y, wid = Math.max(_box.max.x - _box.min.x, _box.max.z - _box.min.z) * Math.max(sc.x, sc.z);
     if (o.isInstancedMesh && wid < 5 && !o.userData.tree) return; // small instanced plants
-    if (hgt > 0.35 && wid < 900) { o.castShadow = true; o.receiveShadow = true; }
+    if (hgt > 0.35 && wid < 900) o.castShadow = true; // (casting only: receiving is set at load, see gltfLoader)
   });
 }
 let qT = 16, qN = 0;
@@ -2450,6 +2450,9 @@ const LIVERY_TEX = { n_aic: 'a20n_aic', n_vti: 'a20n_vti', b_baw: 'b789_baw', n_
 for (const [k, tex] of Object.entries(LIVERY_TEX)) MODEL_SPECS[k] = { base: k.startsWith('b_') ? 'b_vir' : 'n_igo', tex, livery: true };
 const LIVERY_KEYS = ['n_igo', 'b_vir', ...Object.keys(LIVERY_TEX)];
 const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+// every model takes shadows from the moment it loads: receiveShadow is part of a shader's identity, so switching it on
+// later (refreshCasters) compiled every model material twice
+{ const load = gltfLoader.loadAsync.bind(gltfLoader); gltfLoader.loadAsync = (...a) => load(...a).then((g) => { g.scene.traverse((o) => { if (o.isMesh) o.receiveShadow = true; }); return g; }); }
 /** a float copy of any attribute, read straight off its typed array (getX per element is far too slow at 100k+) */
 function floatAttr(a) {
   const n = a.itemSize, cnt = a.count, inter = a.isInterleavedBufferAttribute;
@@ -2755,7 +2758,7 @@ function horn(gain) { const c = AUDIO.ctx, t = c.currentTime, g = c.createGain()
 function updateSound() {
   if (!AUDIO.on || !AUDIO.ctx) return;
   const c = AUDIO.ctx, t = c.currentTime, cam = camera.position, near = (list) => list.reduce((m, p) => Math.min(m, cam.distanceTo(p)), 1e9);
-  const dT = near(AIRSIDE.circuits.map((q) => q.g.position)), dJ = near(AIRSIDE.movers.filter((m) => m.g.visible).map((m) => m.g.position));
+  const dT = near([...AIRSIDE.circuits.map((q) => q.g.position), ...(CADET.on ? [CADET.plane.position] : [])]), dJ = near(AIRSIDE.movers.filter((m) => m.g.visible).map((m) => m.g.position));
   AUDIO.engine.gain.setTargetAtTime(0.16 * Math.pow(Math.max(0, 1 - dT / 900), 2), t, 0.25);
   AUDIO.rumble.gain.setTargetAtTime(0.5 * Math.pow(Math.max(0, 1 - dJ / 2200), 2), t, 0.4);
   if (t > AUDIO.birdAt) { AUDIO.birdAt = t + 2 + Math.random() * 5; if (cam.y < 120) for (let k = 0; k < 2 + ((Math.random() * 3) | 0); k++) chirp(t + k * 0.13, 0.04); }
@@ -3897,7 +3900,10 @@ function buildFieldExtras(air) {
   // the bowser beside the line, and the trainer that taxis out (a placeholder until the Cessna arrives)
   const ft = fuelTruck(); ft.position.set(-1500, 0, -58); ft.rotation.y = Math.PI / 2; air.add(ft);
   const taxi = new THREE.Group(); taxi.userData.dynamic = true; taxi.userData.body = taxi.add(bakeGroup(trainer(navy))).children.at(-1);
-  circuitLights(taxi, 2); air.add(taxi); AIRSIDE.taxiTrainers = [taxi];
+  circuitLights(taxi, 2); air.add(taxi);
+  const cadet = new THREE.Group(); cadet.rotation.order = 'YZX'; cadet.userData.dynamic = true; cadet.visible = false;
+  cadet.userData.body = cadet.add(bakeGroup(trainer(navy))).children.at(-1); circuitLights(cadet, 1); air.add(cadet);
+  AIRSIDE.taxiTrainers = [taxi, cadet]; CADET.plane = cadet; CADET.taxi = taxi; CADET.route = buildCadetRoute();
   const tp = [[-1452, -70], [-1452, -100], [-1470, -114], [-1640, -114], [-1662, -118], [-1640, -122], [-1460, -122], [-1446, -104], [-1446, -78], [-1449, -64]];
   AIRSIDE.vehicles.push({ g: taxi, path: new THREE.CatmullRomCurve3(tp.map(([x, z]) => new THREE.Vector3(x, 0, z)), true, 'centripetal'), speed: 5, phase: 0, t0: 13 });
   // two pilots walking out from the club to the line and back
@@ -4148,6 +4154,7 @@ function updateAirside(now) {
   const t = now / 1000;
   stepTraffic(t);
   stepCircuits(t, Math.min(0.5, Math.max(0, t - (AIRSIDE.circT ?? t)))); AIRSIDE.circT = t;
+  stepCadet(t);
   for (const m of AIRSIDE.movers) {
     const s = sampleRoute(AIRSIDE.route, m.u, m.s);
     m.g.visible = AIRSIDE.active && !m.waiting; m.shadow.visible = m.g.visible && !m.real; // a real model brings its own ground shadow
@@ -4354,7 +4361,7 @@ async function init() {
   window.__marks = [['start', Math.round(t0)]];
   const STEPS = { furniture: [12, 'Furnishing the lobby'], exterior: [18, 'Building the campus'], lobby: [24, 'Building the campus'], airside: [40, 'Laying out the runway'], built: [62, 'Planting the countryside'],
     merged: [70, 'Lighting the lobby'], sky: [74, 'Painting the sky'], grass: [80, 'Growing the grass'], fx: [84, 'Warming up the engines'], shaders: [94, 'Almost ready'], 'first-frame': [100, 'Cleared for take-off'] };
-  const mark = (k) => { window.__marks.push([k, Math.round(performance.now() - t0)]);
+  const mark = (k) => { window.__marks.push([k, Math.round(performance.now() - t0), renderer.info.programs?.length ?? 0]);
     const s = STEPS[k], bar = document.getElementById('loaderBar'), txt = document.getElementById('loaderText'), ld = document.getElementById('loader');
     if (s && bar) { bar.style.width = s[0] + '%'; txt.textContent = s[1] + (s[0] < 100 ? '…' : ''); }
     if (k === 'first-frame' && ld) { ld.style.opacity = '0'; setTimeout(() => ld.remove(), 700); } };
@@ -4430,7 +4437,11 @@ async function init() {
   }
   // compile the opening view's shaders in parallel (KHR_parallel_shader_compile), capped so a slow GPU never holds the
   // cover for long; once the page is up, the airside and rooms warm in the background so walking in doesn't hitch
+  // (into the composer's buffer, as every real frame is: a shader for the screen differs from one for a render target
+  // in its tone mapping and colour space, and compiling for the wrong one made the first frame compile them all again)
+  const warmRT = renderer.getRenderTarget(); if (FX) renderer.setRenderTarget(FX.composer.readBuffer);
   await Promise.race([renderer.compileAsync(scene, camera).catch(() => {}), new Promise((r) => setTimeout(r, 6000))]);
+  renderer.setRenderTarget(warmRT);
   mark('shaders');
   frame();
   mark('first-frame');
@@ -4441,7 +4452,9 @@ async function init() {
     all.far = 4000;
     all.updateProjectionMatrix();
     AIRSIDE.root.visible = true; // programs are created synchronously; the wait for them is what runs in parallel
+    const rt = renderer.getRenderTarget(); if (FX) renderer.setRenderTarget(FX.composer.readBuffer); // (for the composer's buffer, as above)
     renderer.compileAsync(scene, all).catch(() => {});
+    renderer.setRenderTarget(rt);
     AIRSIDE.root.visible = AIRSIDE.active;
   }, 800);
   requestAnimationFrame(() => { mark('raf'); document.documentElement.classList.add('is-ready'); });
@@ -6153,7 +6166,7 @@ const COURSES = {
       { label: 'Final approach', pos: [1290, 46, -262], look: [560, 10, -322] },
       { label: 'Hangar row', pos: [-330, 26, -200], look: [-610, 9, -55] },
       ...(FIELD !== 'delhi' ? [{ label: 'Control tower', pos: [-812, 33.6, -44], look: [-620, 0, -470] }, { label: 'Flying club', pos: [-1478, 6.4, -40], look: [-1380, 1, -150] },
-        { label: 'Ride a trainer', follow: 'trainer' }, { label: 'Ride the train', follow: 'train' }] : []),
+        { label: 'Ride a trainer', follow: 'trainer' }, { label: 'Ride the train', follow: 'train' }, { label: "Cadet's first flight", follow: 'cadet' }] : []),
     ],
     doorLook: [0, 1.6, -40], split: 0.5, dur: 16,
   },
@@ -6266,15 +6279,140 @@ function goToView(c, i) {
   VIEW.at = i;
   card.querySelectorAll('[data-f="views"] button').forEach((b, k) => b.setAttribute('aria-pressed', String(k === i)));
   const v = c.views[i];
+  if (v.follow !== 'cadet') endCadet(false);
   FOLLOW.kind = v.follow ?? null; FOLLOW.k = 0;
+  if (v.follow === 'cadet') startCadet();
   if (v.follow) { VIEW.tween?.kill(); setCardCollapsed(true); return; }
   flyTo(v.pos, v.look, 2.4 + roomCam.pos.distanceTo(new THREE.Vector3(...v.pos)) / 900);
+}
+/* ---------- A cadet's first flight: one trainer from briefing to debrief, captioned stage by stage ----------
+   The route is sampled like the circuits (0.25 s, heading h, pitch p, bank r): the walk-round on the GA apron, taxi
+   along K to J1, the run-up at the hold, line up on 10 and take off eastbound, a left-hand circuit north of the field
+   at 200 m, a full-stop landing, vacate at J2 and taxi back to the line. Long legs play faster. While it runs the
+   lesson holds the runway: the airliners hold short and wait to start their approaches, the circuit trainers go
+   around. */
+const CADET = { on: false, t: 0, plane: null, taxi: null, route: null, stage: -1, ui: null };
+const CADET_STAGES = {
+  brief: ['Briefing', 'At the flying club your instructor goes through the weather, the circuit you will fly and the radio calls.'],
+  walk: ['Walk-round', 'Fuel and oil, tyres, control surfaces, the pitot tube: every check before you climb in.'],
+  taxi: ['Taxi', 'Cleared to taxi to holding point J1. Keep the nose wheel on the yellow line.'],
+  hold: ['Run-up at the hold', 'Engine run-up and magneto checks, then the call: “Ready for departure.”'],
+  takeoff: ['Take-off, runway 10', 'Full power, keep her straight with rudder, rotate at 55 knots.'],
+  upwind: ['Climb out', 'Climb straight ahead, wings level, at 70 knots.'],
+  crosswind: ['Crosswind', 'Turn left and keep climbing to circuit height.'],
+  downwind: ['Downwind', '“Downwind, full stop.” Before-landing checks, and keep the runway off your left wing.'],
+  base: ['Base', 'Power back, first stage of flap, start the descent.'],
+  final: ['Final approach', 'Line up with the centreline and aim for the numbers at 65 knots.'],
+  landing: ['Touchdown', 'Flare, hold off, let the main wheels settle, then brakes.'],
+  taxiIn: ['Vacate and taxi in', 'Off the runway at J2, after-landing checks, taxi back to the line.'],
+  debrief: ['Debrief', 'That was your first circuit. Every pilot’s journey starts right here.'],
+};
+function buildCadetRoute() {
+  const dt = 0.25, S = [], marks = [], wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  let x = -1449, z = -68, y = 0, h = Math.PI / 2, v = 0, p = 0, r = 0, t = 0;
+  const rec = () => { S.push({ t, x, y, z, h, p, r }); t += dt; };
+  const fwd = () => { x += Math.cos(h) * v * dt; z -= Math.sin(h) * v * dt; };
+  const stage = (k, rate = 1) => marks.push({ k, t, rate });
+  const wait = (s) => { for (let i = 0; i < s / dt; i++) rec(); };
+  const turn = (dh, R, climb = 0, bank = 0) => { const n = Math.max(2, Math.ceil(Math.abs(dh) * R / Math.max(v, 1) / dt));
+    for (let i = 0; i < n; i++) { r = -Math.sign(dh) * bank * Math.min(1, i / 6, (n - i) / 6); rec(); h += dh / n; fwd(); y += climb * dt; } r = 0; h = wrap(h); };
+  stage('brief'); wait(9);
+  stage('walk'); wait(11);
+  stage('taxi', 2); v = 8;
+  while (z > -104) { rec(); fwd(); }
+  turn(Math.PI / 2, 14);                                   // left onto K, westbound
+  while (x > -1646) { rec(); fwd(); }
+  turn(-Math.PI / 2, 14);                                  // right onto J1, north
+  while (z > -228) { rec(); fwd(); }
+  stage('hold'); v = 0; wait(8);
+  v = 5; while (z > -312) { rec(); fwd(); }
+  turn(-Math.PI / 2, 10);                                  // right onto runway 10, eastbound
+  z = RWY_Z; h = 0; v = 0; wait(2);
+  stage('takeoff');
+  while (v < 31) { rec(); fwd(); v += 2.6 * dt; }
+  stage('upwind');
+  while (x < -100) { p = Math.min(0.15, p + 0.06 * dt); rec(); fwd(); y = Math.min(200, y + 5 * dt); v = Math.min(36, v + 0.4 * dt); }
+  stage('crosswind', 2); v = 42; p = 0.04;
+  turn(Math.PI / 2, 260, 1.5, 0.4);                        // left, north
+  while (z > RWY_Z - 780) { rec(); fwd(); y = Math.min(200, y + 2 * dt); }
+  stage('downwind', 2.2); p = 0;
+  turn(Math.PI / 2, 260, 0, 0.4); y = 200;                 // left, westbound
+  while (x > -2550) { rec(); fwd(); }
+  stage('base', 1.6); p = -0.03;
+  turn(Math.PI / 2, 260, -1.6, 0.4);                       // left, south, descending
+  while (z < RWY_Z - 270) { rec(); fwd(); y -= 1.6 * dt; }
+  stage('final'); turn(Math.PI / 2, 270, -1.6, 0.4);       // left onto final, eastbound
+  z = RWY_Z; h = 0; v = 32;
+  const TD = -1520, x0 = x, y0 = y;
+  while (x < TD) { y = y0 * (TD - x) / (TD - x0); p = -0.03 + 0.08 * (1 - Math.min(1, (TD - x) / 60)); rec(); fwd(); }
+  y = 0; stage('landing');
+  while (v > 9) { p = Math.max(0, p - 0.03 * dt); rec(); fwd(); v -= 2.2 * dt; }
+  stage('taxiIn', 2.5); p = 0; v = 9;
+  while (x < -655) { rec(); fwd(); }
+  turn(-Math.PI / 2, 15);                                  // right onto J2, south
+  while (z < -132) { rec(); fwd(); }
+  turn(-Math.PI / 2, 14);                                  // right onto K, westbound
+  while (x > -1435) { rec(); fwd(); }
+  turn(Math.PI / 2, 14);                                   // left into the apron, south
+  while (z < -68) { rec(); fwd(); }
+  v = 0; stage('debrief'); wait(9);
+  return { S, dt, T: t, marks };
+}
+function cadetUi() {
+  if (CADET.ui) return CADET.ui;
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:35;width:min(560px,calc(100vw - 32px));padding:16px 18px;border-radius:14px;background:rgba(10,18,44,.9);color:#fff;font:400 14px/1.45 Manrope,system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.35);display:none';
+  el.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><strong data-c="title" style="font-size:17px"></strong><span data-c="step" style="opacity:.6;font-size:12px;white-space:nowrap"></span></div><p data-c="text" style="margin:6px 0 12px"></p><div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" data-c="skip" class="btn btn--ghost" style="padding:6px 14px">Next stage ›</button><button type="button" data-c="end" class="btn btn--ghost" style="padding:6px 14px">End flight</button></div>';
+  document.body.appendChild(el);
+  el.querySelector('[data-c=skip]').addEventListener('click', () => { const m = CADET.route.marks, i = m.findIndex((q) => q.t > CADET.t); if (i >= 0) CADET.t = m[i].t; else endCadet(true); });
+  el.querySelector('[data-c=end]').addEventListener('click', () => endCadet(true));
+  return (CADET.ui = el);
+}
+function startCadet() {
+  if (!CADET.route || !CADET.plane) return;
+  CADET.on = true; CADET.t = 0; CADET.stage = -1; CADET.last = null;
+  CADET.plane.visible = true; if (CADET.taxi) CADET.taxi.visible = false;
+  setCardCollapsed(true); cadetUi().style.display = 'block';
+}
+function endCadet(back) {
+  if (!CADET.on) return;
+  CADET.on = false; CADET.plane.visible = false; if (CADET.taxi) CADET.taxi.visible = true;
+  if (CADET.ui) CADET.ui.style.display = 'none';
+  AIRSIDE.trainerWins = AIRSIDE.trainerWins.filter((w) => !w.cadet);
+  if (back && FOLLOW.kind === 'cadet') { FOLLOW.kind = null; const c = COURSES.C, i = c.views.findIndex((v) => v.label === 'Flying club'); if (i >= 0) { VIEW.at = -1; goToView(c, i); } setCardCollapsed(false); }
+}
+function stepCadet(t) {
+  if (!CADET.on) return;
+  const R = CADET.route, dtr = Math.min(0.5, Math.max(0, t - (CADET.last ?? t))); CADET.last = t;
+  let i = R.marks.length - 1; while (i > 0 && R.marks[i].t > CADET.t) i--;
+  CADET.t += dtr * R.marks[i].rate;
+  if (CADET.t >= R.T - R.dt) { endCadet(true); return; }
+  if (i !== CADET.stage) { CADET.stage = i; const [ti, tx] = CADET_STAGES[R.marks[i].k], ui = cadetUi();
+    ui.querySelector('[data-c=title]').textContent = ti; ui.querySelector('[data-c=text]').textContent = tx; ui.querySelector('[data-c=step]').textContent = `${i + 1} of ${R.marks.length}`; }
+  // hold the runway from the run-up to the landing roll, rolling forward: the airliners and circuits see it coming
+  const k = (key) => R.marks.find((m) => m.k === key)?.t ?? 0;
+  if (CADET.t < k('taxiIn')) { AIRSIDE.trainerWins = AIRSIDE.trainerWins.filter((w) => !w.cadet); const w = [t - 1, t + 300]; w.cadet = true; AIRSIDE.trainerWins.push(w); }
+  sampleRoute(R, CADET.t, CADET.s ??= {});
+  const g = CADET.plane; g.position.set(CADET.s.x, CADET.s.y, CADET.s.z); g.rotation.set(CADET.s.r ?? 0, CADET.s.h, CADET.s.p);
+}
+const _cq2 = new THREE.Vector3();
+function cadetCamera(dt) {
+  if (!CADET.on) return;
+  const g = CADET.plane, key = CADET.route.marks[Math.max(0, CADET.stage)]?.k, fixed = ['brief', 'debrief', 'walk', 'hold', 'landing'].includes(key), e = 1 - Math.exp(-Math.min(dt, 100) / 1000 * (fixed ? 2.5 : 7)); // a chase keeps up
+  g.getWorldPosition(_fp); _ff.set(Math.cos(CADET.s?.h ?? 0), 0, -Math.sin(CADET.s?.h ?? 0));
+  if (key === 'brief' || key === 'debrief') { _fl.set(-1478, 6.4, -40); _cq2.copy(_fp).setY(1.5); }
+  else if (key === 'walk') { const a = performance.now() / 4000; _fl.set(_fp.x + Math.cos(a) * 9, 2.3, _fp.z + Math.sin(a) * 9); _cq2.copy(_fp).setY(1.2); }
+  else if (key === 'hold') { _fl.copy(_fp).add(new THREE.Vector3(_ff.z, 0, -_ff.x).multiplyScalar(-11)).addScaledVector(_ff, 6); _fl.y = 2.4; _cq2.copy(_fp).setY(1.2); }
+  else if (key === 'landing') { _fl.set(-1380, 5, RWY_Z + 34); _cq2.copy(_fp).setY(_fp.y + 1); }
+  else { const air = _fp.y > 3, back = air ? 16 : 13; _fl.copy(_fp).addScaledVector(_ff, -back); _fl.y = _fp.y + (air ? 4 : 3.2); _cq2.copy(_fp).addScaledVector(_ff, 30); _cq2.y = _fp.y + (air ? 0 : 1); }
+  roomCam.pos.lerp(_fl, e); roomCam.look.lerp(_cq2, e);
 }
 /** Ride-along: a chase camera behind one of the circuit trainers (the one furthest from its touchdown, so the ride
  *  starts in the air), or alongside the train; it eases in from wherever the camera was */
 const FOLLOW = { kind: null, k: 0, who: null };
 const _fp = new THREE.Vector3(), _ff = new THREE.Vector3(), _fl = new THREE.Vector3(), _fo = new THREE.Object3D();
 function updateFollow(dt) {
+  if (FOLLOW.kind === 'cadet') return cadetCamera(dt);
   const e = 1 - Math.exp(-Math.min(dt, 100) / 1000 * (FOLLOW.k < 1 ? 1.2 : 4)); FOLLOW.k = Math.min(1, FOLLOW.k + Math.min(dt, 100) / 2500);
   if (FOLLOW.kind === 'trainer') {
     if (!FOLLOW.who || !AIRSIDE.circuits.includes(FOLLOW.who)) FOLLOW.who = AIRSIDE.circuits.reduce((a, c2) => (c2.g.position.y > (a?.g.position.y ?? -1) ? c2 : a), null);
@@ -6290,7 +6428,7 @@ function updateFollow(dt) {
 }
 async function leaveRoom() {
   if ((mode !== 'room' && mode !== 'screen') || !roomTl) return;
-  FOLLOW.kind = null; hideTip();
+  FOLLOW.kind = null; hideTip(); endCadet(false);
   // from another viewpoint, fly back to where the door's flight ended, then reverse it home
   const c = COURSES[activeRoom];
   if (mode === 'room' && c?.views && VIEW.at !== 0) { hideCard(); mode = 'moving'; VIEW.at = 0; await flyTo(c.pos, c.look, 2.6); mode = 'room'; }
