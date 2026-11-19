@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=11" />
+  <link rel="stylesheet" href="style.css?v=15" />
   <script type="importmap">
     { "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
@@ -24,6 +24,13 @@
   </div>
 
   <canvas class="scene" id="scene" aria-hidden="true"></canvas>
+  <div id="loader" role="status" aria-live="polite" style="position:fixed;inset:0;z-index:50;display:grid;place-items:center;background:#0b1430;color:#fff;font:500 15px/1.4 Manrope,system-ui,sans-serif;transition:opacity .6s">
+    <div style="width:min(320px,80vw);text-align:center">
+      <img src="brand/logo-white-wordmark.svg" alt="AviationSpot360" style="width:180px;max-width:60vw;margin-bottom:22px" onerror="this.remove()">
+      <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.15);overflow:hidden"><div id="loaderBar" style="height:100%;width:4%;background:#00a2e5;transition:width .4s"></div></div>
+      <p id="loaderText" style="margin:14px 0 0;opacity:.8">Preparing the airfield&hellip;</p>
+    </div>
+  </div>
   <div class="vignette" aria-hidden="true"></div>
 
   <header class="top">
@@ -34,18 +41,20 @@
     </div>
   </header>
 
+  <p class="osm-credit">Fictional airfield &middot; Hangars: &ldquo;Hangar Embraer&rdquo; by Simaoelis3D, <a href="http://creativecommons.org/licenses/by/4.0/" rel="license noopener" target="_blank">CC BY 4.0</a></p>
+
   <div class="captions">
     <section class="cap cap--intro" data-in="-1" data-hold="0.1" data-out="0.16">
       <p class="eyebrow">AviationSpot360 Ground School</p>
       <h1>Where every pilot's journey <em>begins.</em></h1>
       <p class="cap__hint"><span class="cap__line"></span>Scroll to step inside</p>
     </section>
-    <section class="cap cap--lobby" data-in="0.46" data-hold="0.54" data-out="0.74">
+    <section class="cap cap--lobby" data-in="0.676" data-hold="0.724" data-out="0.844">
       <p class="eyebrow">Reception &amp; lounge</p>
       <h2>Check in, <em>settle in.</em></h2>
       <p>Sign in at the front desk, catch the batch schedule on the notice board and wait in the lounge before class.</p>
     </section>
-    <section class="cap cap--end" data-in="0.88" data-hold="0.95" data-out="9">
+    <section class="cap cap--end" data-in="0.928" data-hold="0.97" data-out="9">
       <p class="eyebrow">Three doors</p>
       <h2>Choose where to <em>begin.</em></h2>
       <div class="rooms">
@@ -63,6 +72,14 @@
     <h2 data-f="title"></h2>
     <p class="room-card__lede" data-f="lede"></p>
     <ul class="room-card__list" data-f="points"></ul>
+    <div class="room-card__views" id="roomViews" hidden>
+      <p class="room-card__views-label">Viewpoints</p>
+      <div class="room-card__views-row" data-f="views"></div>
+      <p class="room-card__views-label">Time of day</p>
+      <div class="room-card__views-row" id="todRow"><button type="button" data-tod="day" aria-pressed="true">Day</button><button type="button" data-tod="dusk" aria-pressed="false">Dusk</button></div>
+      <p class="room-card__views-label">Sound</p>
+      <div class="room-card__views-row"><button type="button" id="soundBtn" aria-pressed="false">Sound off</button></div>
+    </div>
     <div class="room-card__actions">
       <button class="btn" type="button" id="engineOpen" hidden>Open engine simulator</button>
       <a class="btn" href="https://nikunj69420.github.io/aviationspot/#board">Join early access</a>
@@ -91,6 +108,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/ScrollTrigger.min.js"></script>
   <script src="https://unpkg.com/lenis@1.1.13/dist/lenis.min.js"></script>
-  <script type="module" src="main.js?v=75"></script>
+  <script type="module" src="main.js?v=167"></script>
 </body>
 </html>
