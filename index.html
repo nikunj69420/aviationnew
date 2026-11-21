@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=24" />
+  <link rel="stylesheet" href="style.css?v=31" />
   <script type="importmap">
     { "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
@@ -19,35 +19,51 @@
   </script>
 </head>
 <body>
-  <div class="cover" id="cover" aria-hidden="true">
-    <img src="brand/logo-white.svg" alt="" />
-  </div>
+  <div class="cover" id="cover" aria-hidden="true"><img class="cover__img" src="tex/hero_poster.webp" alt="" fetchpriority="high" decoding="async" /></div>
 
   <canvas class="scene" id="scene" aria-hidden="true"></canvas>
-  <div id="loader" role="status" aria-live="polite" style="position:fixed;inset:0;z-index:50;display:grid;place-items:center;background:#0b1430;color:#fff;font:500 15px/1.4 Manrope,system-ui,sans-serif;transition:opacity .6s">
-    <div style="width:min(320px,80vw);text-align:center">
-      <img src="brand/logo-white-wordmark.svg" alt="AviationSpot360" style="width:180px;max-width:60vw;margin-bottom:22px" onerror="this.remove()">
-      <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.15);overflow:hidden"><div id="loaderBar" style="height:100%;width:4%;background:#00a2e5;transition:width .4s"></div></div>
-      <p id="loaderText" style="margin:14px 0 0;opacity:.8">Preparing the airfield&hellip;</p>
-    </div>
+  <div class="loader" id="loader" role="status" aria-live="polite">
+    <span class="loader__bar"><span id="loaderBar"></span></span>
+    <span class="loader__text" id="loaderText">Preparing the airfield&hellip;</span>
   </div>
   <div class="vignette" aria-hidden="true"></div>
 
   <header class="top">
     <a href="https://nikunj69420.github.io/aviationspot/" class="top__brand"><img src="brand/logo-white-wordmark.svg" alt="AviationSpot360 home" /></a>
+    <button type="button" class="top__back" id="topBack" aria-label="Back to lobby"><span aria-hidden="true">&larr;</span><span>Back<span class="top__back-long"> to lobby</span></span></button>
+    <nav class="chapters" id="chapters" aria-label="Chapters">
+      <button type="button" class="chapters__toggle" id="chaptersToggle" aria-expanded="false" aria-controls="chaptersList"><span aria-hidden="true" class="chapters__burger"></span>Explore</button>
+      <div class="chapters__list" id="chaptersList">
+        <button type="button" data-go="campus">Campus</button>
+        <button type="button" data-go="lobby">Lobby</button>
+        <button type="button" data-go="A"><span class="chapters__tag">A</span>Cadet Prep</button>
+        <button type="button" data-go="B"><span class="chapters__tag">B</span>Mentorship</button>
+        <button type="button" data-go="C"><span class="chapters__tag">C</span>Airside</button>
+      </div>
+    </nav>
     <div class="top__right">
-      <span class="top__tag">Ground School · Campus</span>
       <button type="button" class="top__radar" id="radarOpen"><span class="top__dot" aria-hidden="true"></span>Live radar</button>
+      <a class="btn btn--sm top__cta" href="https://nikunj69420.github.io/aviationspot/#board">Join early access</a>
     </div>
   </header>
 
-  <p class="osm-credit">Fictional airfield &middot; Hangars: &ldquo;Hangar Embraer&rdquo; by Simaoelis3D, <a href="http://creativecommons.org/licenses/by/4.0/" rel="license noopener" target="_blank">CC BY 4.0</a></p>
+  <p class="osm-credit">Fictional airfield &middot; Hangars: &ldquo;Hangar Embraer&rdquo; by Simaoelis3D, ramp crew: &ldquo;Male Ramp Worker Idle&rdquo; by Swissport Academy (modified), cars: &ldquo;Car Scene&rdquo; by toivo, airliners: &ldquo;Airbus A320-200&rdquo; by Dlourine and &ldquo;B737-800 Model&rdquo; by hikami3150, jet: &ldquo;Plane&rdquo; by Noah, roads: &ldquo;Road Modular&rdquo; by mortalityrexotable, verges: &ldquo;Field&rdquo; by Forest Run Forever (all modified), all <a href="http://creativecommons.org/licenses/by/4.0/" rel="license noopener" target="_blank">CC BY 4.0</a> &middot; Trainers: &ldquo;Cessna 180 Skywagon&rdquo; by helijah</p>
 
   <div class="captions">
     <section class="cap cap--intro" data-in="-1" data-hold="0.1" data-out="0.16">
       <p class="eyebrow">AviationSpot360 Ground School</p>
       <h1>Where every pilot's journey <em>begins.</em></h1>
-      <p class="cap__hint"><span class="cap__line"></span>Scroll to step inside</p>
+      <p class="cap__hint cap__hint--big"><span class="cap__line"></span>Scroll to enter</p>
+    </section>
+    <section class="cap cap--field" data-in="0.17" data-hold="0.21" data-out="0.3">
+      <p class="eyebrow">From the air</p>
+      <h2>The world your training <em>leads to.</em></h2>
+      <p>Trainers in the circuit, airliners at the terminal, an expressway out across the plain.</p>
+    </section>
+    <section class="cap cap--campus" data-in="0.41" data-hold="0.44" data-out="0.55">
+      <p class="eyebrow">The campus</p>
+      <h2>Off the street, <em>and in.</em></h2>
+      <p>Classrooms, a mentor's study and a door out to the airfield, all under one roof.</p>
     </section>
     <section class="cap cap--lobby" data-in="0.676" data-hold="0.724" data-out="0.844">
       <p class="eyebrow">Reception &amp; lounge</p>
@@ -58,11 +74,10 @@
       <p class="eyebrow">Three doors</p>
       <h2>Choose where to <em>begin.</em></h2>
       <div class="rooms">
-        <button type="button" data-room="A"><span class="rooms__tag">A</span>Cadet Prep</button>
-        <button type="button" data-room="C"><span class="rooms__tag">C</span>Airside</button>
-        <button type="button" data-room="B"><span class="rooms__tag">B</span>1-on-1 Mentorship</button>
+        <button type="button" data-room="A"><span class="rooms__tag">A</span><span class="rooms__body"><strong>Cadet Prep</strong><span>Aptitude, group discussion and interview practice for airline cadet selection</span></span></button>
+        <button type="button" data-room="C"><span class="rooms__tag">C</span><span class="rooms__body"><strong>Airside</strong><span>Fly over a training airfield and ride along a cadet's first lesson</span></span></button>
+        <button type="button" data-room="B"><span class="rooms__tag">B</span><span class="rooms__body"><strong>1-on-1 Mentorship</strong><span>Meet the mentor and the journey behind the advice</span></span></button>
       </div>
-      <p class="rooms__hint">Tap a door to step inside</p>
     </section>
   </div>
 
@@ -102,13 +117,13 @@
     <button class="btn btn--ghost engine-ov__close" type="button" id="engineClose"><span aria-hidden="true">✕</span> Close</button>
   </div>
 
-  <div class="progress" aria-hidden="true"><span id="progressFill"></span></div>
+  <div class="progress" aria-hidden="true"><span id="progressFill"></span><i style="top:41%" data-at="0.41"></i><i style="top:68%" data-at="0.68"></i><i style="top:93%" data-at="0.93"></i></div>
 
   <main class="track" id="track" aria-label="A walk from the campus entrance into the reception lobby"></main>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/ScrollTrigger.min.js"></script>
   <script src="https://unpkg.com/lenis@1.1.13/dist/lenis.min.js"></script>
-  <script type="module" src="main.js?v=191"></script>
+  <script type="module" src="main.js?v=223"></script>
 </body>
 </html>

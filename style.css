@@ -566,3 +566,168 @@ body {
   .rc-settings { flex-direction: column; gap: 8px; }
 }
 @media (prefers-reduced-motion: reduce) { .rc-grid button, .rc-switch i::after { transition: none; } }
+
+/* =====================================================================================================================
+   One interface: shared tokens for every overlay (header, chapters, captions, cards, lesson, radar, labels, loader)
+   ===================================================================================================================== */
+:root {
+  --r-sm: 10px; --r-md: 14px; --r-lg: 20px;
+  --glass: linear-gradient(180deg, rgba(14, 26, 66, 0.84), rgba(9, 18, 48, 0.9));
+  --glass-soft: rgba(11, 22, 58, 0.55);
+  --line: rgba(243, 245, 250, 0.12);
+  --label: rgba(243, 245, 250, 0.7);
+  --shadow-lg: 0 24px 60px rgba(3, 8, 26, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+}
+.rc-label, .room-card__views-label { color: var(--label); }
+.btn--sm { padding: 8px 14px; font-size: 13px; }
+
+/* ---------- The first seconds: the opening shot as a still, the 3D fades in over it ---------- */
+.scene { z-index: 0; }
+.cover { z-index: 1; background: var(--navy-deep); }
+.cover__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 1; }
+.vignette { z-index: 2; }
+html:not(.is-ready) body { overflow: hidden; }
+.loader { position: fixed; z-index: 50; left: 50%; bottom: 22px; translate: -50% 0; display: flex; align-items: center; gap: 12px; padding: 10px 16px 10px 14px;
+  border-radius: 999px; background: var(--glass); border: 1px solid var(--line); box-shadow: var(--shadow-lg); backdrop-filter: blur(14px);
+  color: var(--ink); font: 600 12.5px/1 Manrope, system-ui, sans-serif; transition: opacity .6s var(--ease-out); }
+.loader__bar { position: relative; width: 120px; height: 3px; border-radius: 3px; background: rgba(243, 245, 250, 0.16); overflow: hidden; }
+#loaderBar { position: absolute; inset: 0 auto 0 0; width: 4%; background: var(--cyan); border-radius: 3px; transition: width .4s var(--ease-out); }
+.loader__text { color: var(--ink-soft); white-space: nowrap; }
+
+/* ---------- The opening: a soft shade behind the words, and two ways in ---------- */
+.cap--intro { opacity: 1; }
+.cap--intro::before { content: ''; position: absolute; z-index: -1; inset: -90px -140px -70px -120px; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(6, 12, 34, 0.62), rgba(6, 12, 34, 0.32) 55%, transparent); }
+.cap--intro .eyebrow { color: #7fd3f7; text-shadow: 0 1px 12px rgba(6, 12, 34, 0.8); }
+.hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; pointer-events: auto; }
+.hero-actions .btn { padding: 13px 22px; font-size: 14.5px; }
+.cap--intro .cap__hint { margin-top: 18px !important; }
+
+/* ---------- Header: the brand, the chapters, the radar and early access; Back takes the brand's place in a room ---------- */
+.top { gap: 16px; }
+.top__right { margin-left: auto; gap: 10px; }
+.top__cta { box-shadow: 0 6px 18px rgba(0, 162, 229, 0.25); }
+.top__back { display: none; align-items: center; gap: 8px; white-space: nowrap; height: 40px; padding: 0 16px; border-radius: 999px; cursor: pointer;
+  background: var(--glass-soft); border: 1px solid rgba(243, 245, 250, 0.24); backdrop-filter: blur(10px); color: var(--ink); font: 600 13px/1 Manrope, system-ui, sans-serif;
+  transition: border-color .2s, background .2s; }
+.top__back:hover, .top__back:focus-visible { border-color: var(--cyan); background: rgba(17, 28, 68, 0.85); outline: none; }
+.in-room .top__back { display: inline-flex; }
+.in-room .top__brand { display: none; }
+.chapters { position: absolute; left: 50%; translate: -50% 0; pointer-events: auto; }
+.chapters__toggle { display: none; }
+.chapters__list { display: flex; gap: 2px; padding: 4px; border-radius: 999px; background: var(--glass-soft); border: 1px solid var(--line); backdrop-filter: blur(12px); box-shadow: 0 10px 30px rgba(4, 10, 30, 0.25); }
+.chapters__list button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border: 0; border-radius: 999px; background: transparent; cursor: pointer;
+  color: rgba(243, 245, 250, 0.78); font: 600 12.5px/1 Manrope, system-ui, sans-serif; white-space: nowrap; transition: background .2s, color .2s; }
+.chapters__list button:hover { color: #fff; background: rgba(255, 255, 255, 0.07); }
+.chapters__list button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.chapters__list button[aria-current] { color: #fff; background: rgba(0, 162, 229, 0.24); box-shadow: inset 0 0 0 1px rgba(0, 162, 229, 0.55); }
+.chapters__tag { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: rgba(243, 245, 250, 0.9); color: var(--navy); font: 600 11px/1 Fraunces, Georgia, serif; }
+
+/* ---------- The progress line, with a mark at each chapter ---------- */
+.progress { height: 180px; margin-top: -90px; }
+.progress i { position: absolute; left: -3px; width: 7px; height: 7px; border-radius: 50%; translate: 0 -50%; background: var(--navy-deep); border: 1px solid rgba(243, 245, 250, 0.5); transition: background .3s, border-color .3s; }
+.progress i.is-on { background: var(--cyan); border-color: var(--cyan); }
+
+/* ---------- The doors, as cards ---------- */
+.rooms { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: min(880px, calc(100vw - 2 * var(--gutter))); margin: 22px auto 0; }
+.rooms button { align-items: flex-start; gap: 12px; padding: 14px 16px 15px 14px; text-align: left; border-radius: 16px; background: var(--glass-soft); border-color: rgba(243, 245, 250, 0.2);
+  backdrop-filter: blur(12px); box-shadow: 0 12px 30px rgba(4, 10, 30, 0.3); transition: border-color .2s, background .2s, translate .2s var(--ease-out); }
+.rooms button:hover, .rooms button:focus-visible { translate: 0 -2px; border-color: var(--cyan); background: rgba(17, 28, 68, 0.82); }
+.rooms__tag { flex: none; border-radius: 50%; width: 30px; height: 30px; }
+.rooms__body { display: grid; gap: 5px; }
+.rooms__body strong { font: 700 15px/1.2 Manrope, system-ui, sans-serif; color: #fff; }
+.rooms__body span { font: 500 12.5px/1.45 Manrope, system-ui, sans-serif; color: var(--ink-soft); letter-spacing: 0; }
+.cap--end { max-width: none; width: min(880px, calc(100vw - 2 * var(--gutter))); }
+
+/* ---------- The lesson panel, hover labels and the radar bar, in the same look ---------- */
+.lesson { display: none; position: fixed; z-index: 35; left: 50%; bottom: 24px; translate: -50% 0; width: min(560px, calc(100vw - 32px)); padding: 18px 20px 16px;
+  border-radius: var(--r-lg); background: var(--glass); border: 1px solid var(--line); box-shadow: var(--shadow-lg); backdrop-filter: blur(16px); color: var(--ink); }
+.lesson__eyebrow { font: 600 10.5px/1 'JetBrains Mono', ui-monospace, monospace; letter-spacing: .16em; text-transform: uppercase; color: #7fd3f7; }
+.lesson h3 { margin-top: 10px; font: 520 22px/1.15 Fraunces, Georgia, serif; letter-spacing: -0.01em; }
+.lesson p:not(.lesson__eyebrow) { margin-top: 6px; font: 500 14px/1.55 Manrope, system-ui, sans-serif; color: var(--ink-soft); }
+.lesson__bar { margin-top: 14px; height: 3px; border-radius: 3px; background: rgba(243, 245, 250, 0.14); overflow: hidden; }
+.lesson__bar span { display: block; height: 100%; width: 0; background: var(--cyan); border-radius: 3px; transition: width .5s var(--ease-out); }
+.lesson__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.scene-tip { position: fixed; z-index: 30; pointer-events: none; max-width: 280px; padding: 10px 13px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line);
+  box-shadow: 0 12px 30px rgba(3, 8, 26, 0.4); backdrop-filter: blur(12px); color: var(--ink-soft); font: 500 13px/1.45 Manrope, system-ui, sans-serif; opacity: 0; transition: opacity .15s; }
+.scene-tip strong { display: block; margin-bottom: 3px; color: #fff; font: 700 13.5px/1.3 Manrope, system-ui, sans-serif; }
+.radar-ui { background: var(--glass); border-color: var(--line); backdrop-filter: blur(14px); box-shadow: var(--shadow-lg); }
+.radar-ui__tabs button { border-radius: 999px; color: rgba(243, 245, 250, 0.75); }
+
+/* ---------- Narrower screens: the chapters fold into a menu ---------- */
+@media (max-width: 1080px) {
+  .chapters { position: relative; left: auto; translate: none; margin-left: auto; }
+  .top__right { margin-left: 0; }
+  .chapters__toggle { display: inline-flex; align-items: center; gap: 9px; height: 40px; padding: 0 15px; border-radius: 999px; cursor: pointer;
+    background: var(--glass-soft); border: 1px solid rgba(243, 245, 250, 0.26); backdrop-filter: blur(10px); color: var(--ink); font: 600 13px/1 Manrope, system-ui, sans-serif; }
+  .chapters__burger { position: relative; width: 14px; height: 10px; border-top: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; }
+  .chapters__burger::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: 1.5px solid currentColor; translate: 0 -50%; }
+  .chapters__list { position: absolute; top: calc(100% + 8px); right: 0; flex-direction: column; align-items: stretch; min-width: 220px; padding: 6px; border-radius: 16px;
+    background: var(--glass); box-shadow: var(--shadow-lg); opacity: 0; visibility: hidden; translate: 0 -6px; transition: opacity .2s, translate .2s var(--ease-out), visibility .2s; }
+  .chapters.is-open .chapters__list { opacity: 1; visibility: visible; translate: 0 0; }
+  .chapters__list button { justify-content: flex-start; min-height: 44px; padding: 10px 12px; border-radius: 10px; font-size: 14px; }
+}
+/* ---------- Phones ---------- */
+@media (max-width: 640px) {
+  .top { gap: 8px; }
+  .top__cta { display: none; }
+  .top__back-long { display: none; }
+  .top__radar, .top__back, .chapters__toggle { min-height: 44px; }
+  .cap { bottom: 28px; }
+  .cap h1 { font-size: clamp(30px, 9vw, 40px); }
+  .cap h2 { font-size: clamp(26px, 7.5vw, 34px); }
+  .cap--intro::before { inset: -60px -40px -40px -40px; }
+  .hero-actions { margin-top: 20px; }
+  .hero-actions .btn { flex: 1 1 auto; justify-content: center; min-height: 48px; }
+  .rooms { grid-template-columns: 1fr; gap: 8px; }
+  .rooms button { padding: 12px 14px; min-height: 56px; }
+  .rooms__body span { display: none; }
+  .btn, .rc-seg button, .rc-grid button, .radar-ui__tabs button { min-height: 44px; }
+  .rc-switch { min-height: 44px; padding: 4px 8px; }
+  /* the room card becomes a sheet from the bottom edge */
+  .room-card, .room-card[data-side='left'] { left: 0; right: 0; bottom: 0; width: auto; max-width: none; max-height: 68vh; border-radius: 20px 20px 0 0;
+    padding-top: 26px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); border-bottom: 0; }
+  .room-card::after { content: ''; position: absolute; top: 9px; left: 50%; width: 40px; height: 4px; border-radius: 4px; translate: -50% 0; background: rgba(243, 245, 250, 0.32); }
+  .room-card.is-collapsed { left: 0; right: 0; max-width: none; border-radius: 20px 20px 0 0; padding: 22px 14px calc(12px + env(safe-area-inset-bottom)); }
+  .lesson { bottom: 12px; }
+  .loader { bottom: 14px; }
+}
+/* ---------- Phones held sideways: everything slimmer, the card to the side ---------- */
+@media (max-height: 520px) and (orientation: landscape) {
+  .top { padding-top: 10px; padding-bottom: 10px; }
+  .cap { bottom: 18px; }
+  .cap h1 { font-size: 30px; }
+  .cap h2 { font-size: 24px; }
+  .cap p:not(.eyebrow):not(.rooms__hint) { display: none; }
+  .hero-actions { margin-top: 12px; }
+  .rooms { margin-top: 10px; }
+  .rooms__body span { display: none; }
+  .room-card, .room-card[data-side='left'] { left: auto; right: 10px; bottom: 10px; width: min(360px, 52vw); max-height: calc(100vh - 72px); border-radius: 16px; }
+  .progress { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .rooms button, .chapters__list, .loader { transition: none; } }
+
+/* the credits: small, to the right, never across the cards */
+.osm-credit { max-width: min(620px, 56vw); text-align: right; line-height: 1.4; font-size: 10.5px; }
+.in-room .osm-credit { opacity: .75; }
+@media (max-width: 640px) { .osm-credit { display: none; } }
+
+/* the opening: just the view, the line, and the cue to scroll */
+.cap--intro h1 { font-size: clamp(44px, 7vw, 96px); }
+.cap--intro { max-width: 980px; }
+.cap__hint--big { margin-top: 28px !important; font-size: 15px !important; letter-spacing: .14em !important; text-transform: uppercase; color: #fff !important; }
+.cap__hint--big .cap__line { width: 56px; background: #fff; }
+@media (max-width: 640px) { .cap--intro h1 { font-size: clamp(34px, 10vw, 46px); } }
+
+
+/* the radio log on the airfield */
+.radio { position: fixed; z-index: 8; left: 20px; bottom: 22px; width: min(380px, calc(100vw - 40px)); padding: 12px 14px 10px; border-radius: 14px; background: var(--glass); border: 1px solid var(--line);
+  box-shadow: 0 16px 40px rgba(3, 8, 26, .4); backdrop-filter: blur(14px); color: var(--ink-soft); font: 500 12.5px/1.45 'JetBrains Mono', ui-monospace, monospace; opacity: 0; translate: 0 8px; transition: opacity .4s, translate .4s var(--ease-out); pointer-events: none; }
+.radio.is-on { opacity: 1; translate: 0 0; }
+.radio__head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: #7fd3f7; }
+.radio__head i { width: 7px; height: 7px; border-radius: 50%; background: #5fe08f; animation: radarDot 1.2s ease-in-out infinite; }
+.radio__line { margin-top: 3px; opacity: .6; }
+.radio__line.is-new { opacity: 1; color: #fff; }
+.radio__line b { color: #e0b52c; font-weight: 600; margin-right: 4px; }
+@media (max-width: 640px) { .radio { bottom: auto; top: 76px; } }

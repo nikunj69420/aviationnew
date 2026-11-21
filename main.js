@@ -1708,7 +1708,7 @@ const AIRSIDE = { root: null, circuits: [], trainerWins: [], movers: [], blinker
 const FIELD = 'training';
 /** phones, tablets and small-memory devices get a lighter scene: no AO or shadows, less grass, fewer trees and cars, one mist layer */
 const LITE = matchMedia('(pointer: coarse)').matches || (navigator.deviceMemory ?? 8) <= 4 || new URLSearchParams(location.search).has('lite'); // (touch devices, not narrow windows)
-const RWY_Z = -322, TWY_Z = -118, RWY_THR = 760, RWY_END = -1700; // TWY_Z: IGI's taxiway K, 204 m south of 10/28
+const RWY_Z = -322, TWY_Z = -160, RWY_THR = 760, RWY_END = -1700; // TWY_Z: taxiway K, 162 m south of 10/28 (clear of the hangars)
 let GLOW = null, RUNWAY_MAT = null;
 
 function glowPoints(positions, color, size, parent) {
@@ -1745,11 +1745,11 @@ function bakeGroup(g) {
   g.traverse((o) => {
     if (!o.isMesh || o.userData.keep || Array.isArray(o.material)) return;
     const src = o.geometry.clone();
-    for (const k of Object.keys(src.attributes)) if (!['position', 'normal', 'uv'].includes(k)) src.deleteAttribute(k);
+    for (const k of Object.keys(src.attributes)) if (!['position', 'normal', 'uv', 'color'].includes(k)) src.deleteAttribute(k);
     floatGeometry(src);
     const geo = src.index ? src.toNonIndexed() : src;
     for (const k of Object.keys(geo.attributes)) {
-      if (!['position', 'normal', 'uv'].includes(k)) { geo.deleteAttribute(k); continue; }
+      if (!['position', 'normal', 'uv', 'color'].includes(k)) { geo.deleteAttribute(k); continue; }
       // glTF models arrive quantized (normalized int16 / int8, often interleaved): unpack to floats
       // first, or transforming them would clamp positions to the [-1, 1] range
       const a = geo.attributes[k];
@@ -2375,12 +2375,41 @@ function realTaxiPath() {
   const path = []; for (let k = goal; k; k = prev.get(k)) path.unshift(G.get(k).p);
   return path;
 }
+/** a polyline with each corner replaced by an arc of radius R tangent to both legs (straight runs left alone) */
+function filletPath(P, R) {
+  const out = [P[0]];
+  for (let i = 1; i < P.length - 1; i++) {
+    const [ax, az] = P[i - 1], [bx, bz] = P[i], [cx, cz] = P[i + 1];
+    const lu = Math.hypot(ax - bx, az - bz), lv = Math.hypot(cx - bx, cz - bz); if (lu < 0.5 || lv < 0.5) continue;
+    const ux = (ax - bx) / lu, uz = (az - bz) / lu, vx = (cx - bx) / lv, vz = (cz - bz) / lv;
+    const ang = Math.acos(Math.max(-1, Math.min(1, ux * vx + uz * vz)));
+    if (ang > Math.PI - 0.03) { out.push(P[i]); continue; }                    // (straight on)
+    const t = Math.min(R / Math.tan(ang / 2), lu * 0.5, lv * 0.5), r = t * Math.tan(ang / 2);
+    const p1 = [bx + ux * t, bz + uz * t], p2 = [bx + vx * t, bz + vz * t];
+    const bxs = ux + vx, bzs = uz + vz, bl = Math.hypot(bxs, bzs) || 1, dd = r / Math.sin(ang / 2), c = [bx + bxs / bl * dd, bz + bzs / bl * dd];
+    const a0 = Math.atan2(p1[1] - c[1], p1[0] - c[0]); let da = Math.atan2(p2[1] - c[1], p2[0] - c[0]) - a0;
+    while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI;
+    for (let k = 0; k <= 14; k++) out.push([c[0] + Math.cos(a0 + da * k / 14) * r, c[1] + Math.sin(a0 + da * k / 14) * r]);
+  }
+  out.push(P[P.length - 1]);
+  return out;
+}
 function buildRoute() {
   const taxi = realTaxiPath();
-  if (taxi) return buildRealRoute(taxi);
+  if (taxi) {
+    // two stands, two airliners' days with the same runway timings: the nearer stand waits longer at the gate
+    const st = (AERO.data?.aero?.stands ?? []).filter((s) => MOVER_STANDS.includes(s[2])).map((s) => [s[0], s[1] - 14.8]);
+    if (st.length < 2) return buildRealRoute(taxi);
+    let A = buildRealRoute(taxi, st[0], 100), B = buildRealRoute(taxi, st[1], 100);
+    const d = A.marks.tHS - B.marks.tHS;
+    if (d > 0) B = buildRealRoute(taxi, st[1], 100 + d); else if (d < 0) A = buildRealRoute(taxi, st[0], 100 - d);
+    A.alt = B; return A;
+  }
   return buildSyntheticRoute();
 }
-function buildRealRoute(taxi) {
+/** an airliner's day at one stand: land, vacate, taxi in, park nose-in, turn round, push back, taxi out, depart */
+const MOVER_STANDS = ['Stand 2', 'Stand 4'];
+function buildRealRoute(taxi, stand = null, dwell = 0) {
   const dt = 0.25, S = [];
   let x = 2200, y = 0, z = RWY_Z, h = Math.PI, p = 0.035, v = 72, t = 0;
   const glide = Math.tan(THREE.MathUtils.degToRad(3)), TD = RWY_THR - 300;
@@ -2391,30 +2420,48 @@ function buildRealRoute(taxi) {
   let k = 0;
   while (v > 14 && x > taxi[0][0] + 40) { p = Math.max(0, 0.035 - k * 0.004); k++; rec(); fwd(); v -= 2.2 * dt; }
   p = 0;
-  while (x > taxi[0][0] + 2) { v = Math.max(10, v - 1 * dt); rec(); fwd(); }
+  while (x > taxi[0][0] + 40) { v = Math.max(10, v - 1 * dt); rec(); fwd(); } // (room to curve off the runway)
   // follow the taxi path itself: smoothed (Chaikin), walked at taxi speed, slower through the bends
-  let pts = [[x, z], ...taxi];
-  for (let it = 0; it < 3; it++) { const q = [pts[0]]; for (let i = 0; i < pts.length - 1; i++) { const [ax, az] = pts[i], [bx, bz] = pts[i + 1]; q.push([ax * 0.75 + bx * 0.25, az * 0.75 + bz * 0.25], [ax * 0.25 + bx * 0.75, az * 0.25 + bz * 0.75]); } q.push(pts[pts.length - 1]); pts = q; }
-  const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-  const at = (d) => { let i = 1; while (i < cum.length - 1 && cum[i] < d) i++; const u = (d - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1);
-    return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * u, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * u, Math.atan2(-(pts[i][1] - pts[i - 1][1]), pts[i][0] - pts[i - 1][0])]; };
-  const total = cum[cum.length - 1];
-  for (let d = 0; d < total; ) {
-    const [px, pz, ph] = at(d), [, , ah] = at(Math.min(total, d + 20));
-    const bend = Math.abs(Math.atan2(Math.sin(ah - ph), Math.cos(ah - ph)));
-    v = bend > 0.35 ? 7 : 12;
-    x = px; z = pz; h = ph; rec();
-    d += v * dt;
+  // every turn becomes a true arc along the painted lead-on curves (36.5 m: K's half-width plus its 25 m fillet), so
+  // the aircraft stays on the pavement instead of cutting the corner across the grass
+  const walkPath = (raw, slowEnd = false) => {
+    const pts = filletPath(raw, 36.5);
+    const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const at = (d) => { let i = 1; while (i < cum.length - 1 && cum[i] < d) i++; const u = (d - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1);
+      return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * u, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * u, Math.atan2(-(pts[i][1] - pts[i - 1][1]), pts[i][0] - pts[i - 1][0])]; };
+    const total = cum[cum.length - 1];
+    for (let d = 0; d < total; ) {
+      const [px, pz, ph] = at(d), [, , ah] = at(Math.min(total, d + 20));
+      const bend = Math.abs(Math.atan2(Math.sin(ah - ph), Math.cos(ah - ph)));
+      const vt = slowEnd && total - d < 40 ? Math.max(1.2, (total - d) / 8) : bend > 0.25 ? 5.5 : 12;  // creep up to the stop bar
+      v += (vt - v) * 0.12;                                                // ease down into a bend and back up out of it
+      x = px; z = pz; h = ph; rec();
+      d += v * dt;
+    }
+  };
+  if (!stand) walkPath([[x, z], ...taxi]);
+  else {
+    // in: off at J2, along K, right into the stand, nose-in to the stop bar
+    const [sx, sz] = stand, kIn = taxi.findIndex((q) => Math.abs(q[1] - TWY_Z) < 2);
+    walkPath([[x, z], ...taxi.slice(0, kIn + 1), [sx, TWY_Z], [sx, sz]], true);
+    x = sx; z = sz; h = -Math.PI / 2; v = 0;
+    const t0 = t; for (let i = 0; i < dwell / dt; i++) rec();              // the turnaround
+    const t1 = t;
+    // push back: tail first up the lead-in to K, swinging round to face east, then the tug lets go
+    while (z > TWY_Z) { z = Math.max(TWY_Z, z - 2.2 * dt); const k = Math.max(0, Math.min(1, 1 - (z - TWY_Z) / 38)); h = -Math.PI / 2 * (1 - k * k * (3 - 2 * k)); rec(); }
+    h = 0; const tPush = t; for (let i = 0; i < 6 / dt; i++) rec();
+    walkPath([[sx, TWY_Z], ...taxi.filter((q, i) => i > kIn && (Math.abs(q[1] - TWY_Z) > 2 || q[0] > sx + 1))]);
+    S.stand = { sx, sz, t0, t1, tPush };
   }
   // line up westbound, hold, roll and climb
   const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-  v = 5; for (let g = 0; g < 400 && Math.abs(wrap(Math.PI - h)) > 0.02; g++) { h += THREE.MathUtils.clamp(wrap(Math.PI - h), -0.25 * dt, 0.25 * dt); rec(); fwd(); }
+  v = 4; for (let g = 0; g < 800 && Math.abs(wrap(Math.PI - h)) > 0.02; g++) { h += THREE.MathUtils.clamp(wrap(Math.PI - h), -0.14 * dt, 0.14 * dt); rec(); fwd(); } // a slow swing onto the centreline
   z = RWY_Z; h = Math.PI;
   v = 0; for (let i = 0; i < 6 / dt; i++) rec();
   while (v < 76) { rec(); v += 2.3 * dt; fwd(); }
   let c = 0;
   while (x > -2600) { rec(); c += dt; p = Math.min(0.15, c * 0.05); v += 0.6 * dt; y += v * Math.sin(p * 0.9) * dt; fwd(); }
-  return routeMarks({ S, dt, T: t, conn: [] });
+  return routeMarks({ S, dt, T: t, conn: [], stand: S.stand });
 }
 function buildSyntheticRoute() {
   const dt = 0.25, S = [];
@@ -2475,6 +2522,17 @@ function buildCircuit() {
 }
 /** busy windows the trainers have claimed on the runway (absolute seconds), so the airliners hold for them */
 const trainerSoon = (t0, t1) => AIRSIDE.trainerWins.some(([a, b]) => a < t1 && b > t0);
+/* ---------- The radio: what the tower and the aircraft say, as it happens, in a small log on the airfield ----------
+   Fictional callsigns; standard phraseology for runway 28. */
+const RADIO = { el: null, lines: [], quiet: false };
+const CALLS = ['Skyline 214', 'Coastal 88', 'Indus 301', 'Monsoon 52', 'Deccan 711', 'Saffron 19', 'Konkan 406', 'Bluebird 63'];
+function radio(who, msg) {
+  if (RADIO.quiet || !AIRSIDE.active || mode === 'walk') return;
+  if (!RADIO.el) { RADIO.el = Object.assign(document.createElement('div'), { className: 'radio' }); RADIO.el.setAttribute('aria-live', 'polite'); document.body.appendChild(RADIO.el); }
+  RADIO.lines.push({ who, msg, at: performance.now() }); if (RADIO.lines.length > 4) RADIO.lines.shift();
+  RADIO.el.innerHTML = '<p class="radio__head"><i></i>Tower 118.1</p>' + RADIO.lines.map((l, i) => `<p class="radio__line${i === RADIO.lines.length - 1 ? ' is-new' : ''}"><b>${l.who}</b> ${l.msg}</p>`).join('');
+  RADIO.el.classList.add('is-on'); clearTimeout(RADIO.hide); RADIO.hide = setTimeout(() => RADIO.el.classList.remove('is-on'), 14000);
+}
 function stepCircuits(t, dt) {
   const C = AIRSIDE.circuit, r = AIRSIDE.route;
   if (!C) return;
@@ -2487,12 +2545,13 @@ function stepCircuits(t, dt) {
       if (!busy && r?.marks) { const m = r.marks; for (const o of AIRSIDE.movers) { const toTD = (((m.tTD - o.u) % r.T) + r.T) % r.T;
         if (t + toTD - 20 < win[1] && t + toTD + (m.tExit - m.tTD) > win[0]) busy = true;          // an arrival on the runway then
         if (o.u > m.tHS - 1 && o.u <= m.tAir + 2) busy = true; } }                                 // a departure lining up or rolling
-      c.low = busy;
-      if (!busy) AIRSIDE.trainerWins.push(win);
+      c.low = busy; const call = 'AVS ' + (AIRSIDE.circuits.indexOf(c) + 2);
+      radio('TWR', busy ? `${call}, go around, traffic on the runway.` : `${call}, runway 28, cleared touch and go.`);
+      AIRSIDE.trainerWins.push(win);                    // landing or going around, the runway is the trainer's: nothing lines up under it
     }
     sampleRoute(C, c.u, c.s);
     let y = c.s.y;
-    if (c.low && (c.u > C.tFinal || c.u < C.tLift + 25)) y = Math.max(y, 55);                       // go-around: over the runway at 55 m
+    if (c.low && (c.u > C.tFinal || c.u < C.tLift + 25)) y = Math.max(y, 120);                      // go-around: well above the runway
     c.g.position.set(c.s.x, y, c.s.z);
     c.g.rotation.set(c.s.r ?? 0, c.s.h, c.s.p);
     if (c.fans?.length) spinFans(c.fans, t, 40);
@@ -2525,24 +2584,29 @@ function sampleRoute(r, t, out) {
 }
 
 /* ---------- Real aircraft models (meshopt .glb), swapped in over the placeholders ---------- */
-// Credits: Airbus A320 by OUTPISTON (CC BY-NC-SA 4.0), Cessna 182 Skylane by VTX (CC BY-NC-SA 4.0),
+// Credits: Airbus A320 by OUTPISTON (CC BY-NC-SA 4.0), Cessna 180 Skywagon by helijah (Sketchfab Standard; cabin
+// stripped, repainted in AviationSpot navy and cyan),
 // Gulfstream G650ER by Luca Martina (CC BY 4.0), all via Sketchfab; Delhi ATC tower built for the main site.
 const MODEL_SPECS = {
-  a320: { url: 'models/a320.glb', yaw: Math.PI / 2, length: 37.6, fullColour: true },
-  c182: { url: 'models/c182.glb', yaw: -Math.PI / 2, length: 8.8 }, // cabin interior stripped, simplified
-  g650: { url: 'models/g650.glb', yaw: Math.PI / 2, length: 30.4 },
+  // airliners: "Airbus A320-200" by Dlourine and "B737-800 Model" by hikami3150 (both CC BY 4.0, simplified); a very
+  // light jet, "Plane" by Noah (CC BY 4.0, simplified), by the academy's hangar
+  a320: { base: 'n_igo' },
+  c180: { url: 'models/c180.glb', yaw: Math.PI, length: 7.8, prop: true }, // (the file's nose is at -x) // the school's trainers: cabin stripped, AviationSpot livery
+  g650: { url: 'models/vlj.glb', yaw: Math.PI / 2, length: 10.6 },
   // AIG AI aircraft (FAIB A320neo CFM, AIG 787-9 RR), converted from their MSFS models with permission; gear baked down
   // full-detail exterior (LOD0, with its normal and occlusion/roughness/metal maps)
-  n_igo: { url: 'models/a20n_igo.glb?v=2', yaw: Math.PI / 2, length: 37.57, livery: true },
-  b_vir: { url: 'models/b789_vir.glb?v=2', yaw: Math.PI / 2, length: 62.8, livery: true },
+  n_igo: { url: 'models/a320new.glb', yaw: Math.PI, length: 37.57, paint: true },   // (yaws: each file's nose turned to +x)
+  b_vir: { url: 'models/b738.glb', yaw: Math.PI / 2, length: 39.5, paint: true },
 };
 // ground vehicles from Sketchfab: "GameAsset - Airport Pushback" by Loic ALIX (CC BY-NC 4.0), "Airport Catering Truck" by spot1studios (CC BY 4.0)
 MODEL_SPECS.tug = { url: 'models/pushback_tug.glb', yaw: -Math.PI / 2, length: 9.0, keepOne: true };
 MODEL_SPECS.cater = { url: 'models/catering_truck.glb', yaw: -Math.PI / 2, length: 9.13 };
+// the country's cars: "Car Scene" by toivo (CC BY 4.0), reduced to five flat-coloured parts for instancing
+MODEL_SPECS.car = { url: 'models/car.glb', yaw: 0, length: 4.3 };
 // More liveries from the same AIG packs: only the paint differs, so each reuses its type's model with its textures swapped
 const LIVERY_TEX = { n_aic: 'a20n_aic', n_vti: 'a20n_vti', b_baw: 'b789_baw', n_iad: 'a20n_iad', n_alk: 'a20n_alk', n_drk: 'a20n_drk', n_kac: 'a20n_kac', n_jzr: 'a20n_jzr', n_kne: 'a20n_kne', n_oms: 'a20n_oms', n_gfa: 'a20n_gfa', n_axm: 'a20n_axm',
   b_ana: 'b789_ana', b_eth: 'b789_eth', b_tha: 'b789_tha', b_msr: 'b789_msr', b_gfa: 'b789_gfa' };
-for (const [k, tex] of Object.entries(LIVERY_TEX)) MODEL_SPECS[k] = { base: k.startsWith('b_') ? 'b_vir' : 'n_igo', tex, livery: true };
+for (const [k, tex] of Object.entries(LIVERY_TEX)) MODEL_SPECS[k] = { base: k.startsWith('b_') ? 'b_vir' : 'n_igo', tex }; // (the new models carry no liveries: each is the plain type)
 const LIVERY_KEYS = ['n_igo', 'b_vir', ...Object.keys(LIVERY_TEX)];
 const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 // every model takes shadows from the moment it loads: receiveShadow is part of a shader's identity, so switching it on
@@ -2566,7 +2630,7 @@ function floatAttr(a) {
 const RAW_AIR = {};
 function loadAirModel(key) {
   const sp = MODEL_SPECS[key];
-  if (!sp.base) return (RAW_AIR[key] ??= loadAirModelRaw(key));
+  if (!sp.base) { const raw = (RAW_AIR[key] ??= loadAirModelRaw(key)); return sp.paint ? raw.then((w) => paintLivery(w.clone(true), key)) : raw; }
   const texLoader2 = new THREE.TextureLoader(), files = {};
   const tex = (suf) => (files[suf] ??= texLoader2.loadAsync(`models/liveries/${sp.tex}_${suf}.webp?v=2`));
   return (RAW_AIR[sp.base] ??= loadAirModelRaw(sp.base)).then(async (base) => {
@@ -2584,7 +2648,7 @@ function loadAirModel(key) {
       }));
     });
     await Promise.all(jobs);
-    return w;
+    return MODEL_SPECS[sp.base]?.paint ? paintLivery(w, key) : w;
   });
 }
 /** The 787's bone-driven control surfaces (outer flaps, flaperons, spoilerons, outer slats, spoilers 3-7) don't
@@ -2651,7 +2715,25 @@ function groundShadow(obj, { rise = 2, opacity = 0.5, res = 256 } = {}) {
 }
 /** The engines' fans (MSFS "N1 still" / "RR still" parts) on their own pivot about the aircraft's long axis, so a
  *  taxiing aircraft's fans can turn; the motion-blur discs that MSFS swaps in at speed go. */
-const FAN_RE = /^(N1_\d_still|engine\d_RR_still)/i, FAN_BLUR = /^engine\d_RR_blur/i;
+const FAN_RE = /^(N1_\d_still|engine\d_RR_still|prop_spin)/i, FAN_BLUR = /^engine\d_RR_blur/i;
+/** a light aircraft's propeller and spinner, cut out of its single mesh into a part of their own (prop_spin), so
+ *  rigFans can spin it: the triangles wholly in front of the cowling, within cut metres of the nose */
+function splitProp(root, cut = 0.32) {
+  root.updateMatrixWorld(true);
+  const v = new THREE.Vector3(); let nose = -1e9;
+  root.traverse((o) => { if (!o.isMesh) return; const p = o.geometry.attributes.position; for (let i = 0; i < p.count; i++) nose = Math.max(nose, v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld).x); });
+  const meshes = []; root.traverse((o) => { if (o.isMesh) meshes.push(o); });
+  for (const o of meshes) {
+    const g = floatGeometry(o.geometry.clone()), geo = g.index ? g.toNonIndexed() : g, P = geo.attributes.position, names = Object.keys(geo.attributes);
+    const keep = [], prop = [];
+    for (let t = 0; t < P.count; t += 3) { let front = true; for (let k = 0; k < 3; k++) if (v.fromBufferAttribute(P, t + k).applyMatrix4(o.matrixWorld).x < nose - cut) { front = false; break; } (front ? prop : keep).push(t); }
+    if (!prop.length) continue;
+    const pick = (tris) => { const ng = new THREE.BufferGeometry(); for (const n of names) { const a = geo.attributes[n], arr = new Float32Array(tris.length * 3 * a.itemSize);
+      tris.forEach((t, j) => { for (let k = 0; k < 3; k++) for (let c = 0; c < a.itemSize; c++) arr[(j * 3 + k) * a.itemSize + c] = a.getComponent(t + k, c); }); ng.setAttribute(n, new THREE.BufferAttribute(arr, a.itemSize)); } return ng; };
+    o.geometry = pick(keep);
+    const pm = new THREE.Mesh(pick(prop), o.material); pm.name = 'prop_spin'; pm.position.copy(o.position); pm.quaternion.copy(o.quaternion); pm.scale.copy(o.scale); o.parent.add(pm);
+  }
+}
 function rigFans(root) {
   root.updateMatrixWorld(true);
   const fans = [], blur = [];
@@ -2672,6 +2754,59 @@ function rigFans(root) {
 const _fq = new THREE.Quaternion(), _fa = new THREE.Vector3();
 function spinFans(fans, t, rate) { for (const f of fans) f.quaternion.setFromAxisAngle(_fa.fromArray(f.userData.fanAxis), t * rate); }
 /** Load, turn the nose toward +x, scale to real size, sit it on the ground, matte the paint. */
+/** turn an aircraft so its nose leads (+x): its highest points are the top of the fin, which is at the tail */
+function noseForward(root, inner) {
+  inner.updateMatrixWorld(true);
+  const v = new THREE.Vector3(), pts = [];
+  let top = -1e9, x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  root.traverse((o) => { if (!o.isMesh) return; const p = o.geometry.attributes.position, st = Math.max(1, Math.floor(p.count / 4000));
+    for (let i = 0; i < p.count; i += st) { v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld); pts.push(v.x, v.y, v.z); top = Math.max(top, v.y);
+      x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); z0 = Math.min(z0, v.z); z1 = Math.max(z1, v.z); } });
+  // the fin top sits on the centreline at the tail: whichever way that lies from the middle, turn it to -x
+  let sx = 0, sz = 0, n = 0; for (let i = 0; i < pts.length; i += 3) if (pts[i + 1] > top * 0.94) { sx += pts[i]; sz += pts[i + 2]; n++; }
+  if (!n) return;
+  const dx = sx / n - (x0 + x1) / 2, dz = sz / n - (z0 + z1) / 2, th = Math.round((Math.atan2(dz, dx) - Math.PI) / (Math.PI / 2)) * (Math.PI / 2);
+  if (th) { root.rotation.y += th; inner.updateMatrixWorld(true); }
+}
+/** a fictional airline's paint on a plain white airliner: its colour on the fin, a cheatline down the side, the
+ *  engines, a pale belly (vertex colours from where each point sits on the aircraft; no names, no logos) */
+const LIVERY_PALETTES = [
+  { tail: '#c8102e', stripe: '#c8102e', engine: '#c8102e', belly: '#d8dce1' },
+  { tail: '#111c44', stripe: '#00a2e5', engine: '#111c44', belly: '#d8dce1' },
+  { tail: '#0f6b5c', stripe: '#f28c28', engine: '#0f6b5c', belly: '#e6e8ea' },
+  { tail: '#5b2a86', stripe: '#d4a017', engine: '#5b2a86', belly: '#d8dce1' },
+  { tail: '#1d4fbf', stripe: '#1d4fbf', engine: '#c9ced6', belly: '#1d4fbf' },
+  { tail: '#f2b705', stripe: '#1a1a1a', engine: '#f2b705', belly: '#e6e8ea' },
+  { tail: '#e5541b', stripe: '#e5541b', engine: '#e5541b', belly: '#d8dce1' },
+  { tail: '#0b7a3e', stripe: '#d71920', engine: '#0b7a3e', belly: '#e6e8ea' },
+];
+const PAINTED = new Map();
+function paintLivery(w, key) {
+  let h = 0; for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const pal = LIVERY_PALETTES[h % LIVERY_PALETTES.length], C = Object.fromEntries(Object.entries(pal).map(([k, s]) => [k, new THREE.Color(s)])), white = new THREE.Color(0xffffff);
+  w.updateMatrixWorld(true);
+  const skin = (o) => o.isMesh && o.material?.color && !o.material.map && o.material.color.r >= 0.6 && Math.abs(o.material.color.r - o.material.color.b) <= 0.08; // the white skin
+  const box = new THREE.Box3(); w.traverse((o) => { if (skin(o)) box.expandByObject(o, true); });
+  const L = box.max.x - box.min.x, H = box.max.y || 1, v = new THREE.Vector3();
+  w.traverse((o) => {
+    if (!skin(o)) return; const m = o.material;
+    const g = o.geometry, p = g.attributes.position, col = new Float32Array(p.count * 3);
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld);
+      const u = (v.x - box.min.x) / L, hh = v.y / H, az = Math.abs(v.z) / L;
+      const c = u < 0.24 && hh > 0.47 ? C.tail
+        : hh < 0.3 && az > 0.1 && az < 0.21 && u > 0.36 && u < 0.66 ? C.engine
+        : az < 0.07 && az > 0.03 && hh > 0.26 && hh < 0.3 && u > 0.1 && u < 0.93 ? C.stripe
+        : az < 0.06 && hh < 0.2 ? C.belly : white;
+      col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+    }
+    const g2 = new THREE.BufferGeometry(); for (const [n2, a] of Object.entries(g.attributes)) g2.setAttribute(n2, a); g2.setIndex(g.index);
+    g2.setAttribute('color', new THREE.BufferAttribute(col, 3)); o.geometry = g2;
+    if (!PAINTED.has(m)) { const pm = m.clone(); pm.vertexColors = true; pm.color.setScalar(1); PAINTED.set(m, pm); }
+    o.material = PAINTED.get(m);
+  });
+  return w;
+}
 function loadAirModelRaw(key) {
   const sp = MODEL_SPECS[key];
   return gltfLoader.loadAsync(sp.url).then((gltf) => {
@@ -2700,7 +2835,9 @@ function loadAirModelRaw(key) {
     inner.add(root);
     inner.updateMatrixWorld(true);
     unskin(root);
+    if (sp.prop) splitProp(root);
     rigFans(root);
+    if (sp.autoNose) noseForward(root, inner);
     const b = new THREE.Box3().setFromObject(inner, true), size = b.getSize(new THREE.Vector3()), c = b.getCenter(new THREE.Vector3());
     const s = sp.length ? sp.length / size.x : sp.height / size.y;
     inner.scale.setScalar(s);
@@ -3075,13 +3212,14 @@ function swapMover(m, model, k) {
 }
 function upgradeAirside(md) {
   const air = AIRSIDE.root, P = AIRSIDE.placeholders;
-  if (md.c182) {
+  if (md.c180) {
     const spots = P.trainers.map((t) => [t.position.x, t.position.z, t.rotation.y]);
     P.trainers.forEach((t) => t.removeFromParent());
-    air.add(parkedGroup(md.c182, spots));
+    air.add(parkedGroup(md.c180, spots));
     // and the trainers in the circuit fly the real model too
-    if (!BAKED_MOVER.has(md.c182)) BAKED_MOVER.set(md.c182, bakeGroup(SkeletonUtils.clone(md.c182)));
-    for (const g2 of [...AIRSIDE.circuits.map((c) => c.g), ...(AIRSIDE.taxiTrainers ?? [])]) { g2.userData.body?.removeFromParent(); g2.userData.body = BAKED_MOVER.get(md.c182).clone(); g2.add(g2.userData.body); }
+    if (!BAKED_MOVER.has(md.c180)) BAKED_MOVER.set(md.c180, bakeGroup(SkeletonUtils.clone(md.c180)));
+    for (const g2 of [...AIRSIDE.circuits.map((c) => c.g), ...(AIRSIDE.taxiTrainers ?? [])]) { g2.userData.body?.removeFromParent(); g2.userData.body = BAKED_MOVER.get(md.c180).clone(); g2.add(g2.userData.body);
+      g2.userData.fans = []; g2.userData.body.traverse((o) => { if (o.userData.fanAxis) g2.userData.fans.push(o); }); }
   }
   for (const key of LIVERY_KEYS) {
     if (!md[key]) continue;
@@ -3091,7 +3229,7 @@ function upgradeAirside(md) {
       mine.forEach((j) => j.removeFromParent());
       air.add(parkedGroup(md[key], spots));
     }
-    for (const m of AIRSIDE.movers) if (m.livery === key) swapMover(m, md[key], key.startsWith('b_') ? 1.67 : 1);
+    for (const m of AIRSIDE.movers) if (m.livery === key) swapMover(m, md[key], 1);
   }
   if (md.a320) {
     const house = P.jets.filter((j) => !j.userData.livery && !j.userData.keepSimple && j.parent);
@@ -3273,8 +3411,16 @@ function buildAirside() {
     air.add(g);
     const sh = blob(0, 0, 40, 42);
     sh.userData.dynamic = true;
-    AIRSIDE.movers.push({ g, shadow: sh, lift: 4.2, offset: (i / liveries.length) * route.T, s: {}, livery: ['n_igo', 'b_eth', 'n_aic', 'n_kac', 'n_iad', 'b_tha'][i] });
+    AIRSIDE.movers.push({ g, shadow: sh, lift: 4.2, offset: (i / liveries.length) * route.T, s: {}, route: route.alt && i % 2 ? route.alt : route, livery: ['n_igo', 'b_eth', 'n_aic', 'n_kac', 'n_iad', 'b_tha'][i] });
   });
+  // the turnaround stands: their service set (steps, belt loader, ground power, crew, a fuel truck by the wing) is out
+  // while an airliner is on blocks; a pushback tug comes for each one as it leaves
+  AIRSIDE.turnSets = [];
+  for (const R of [route, route.alt]) { const st = R?.stand; if (!st) continue;
+    const set = new THREE.Group(); set.userData.dynamic = true; set.visible = false; standCrew(st.sx, st.sz, set);
+    const ft = fuelTruck(); ft.position.set(st.sx - 13, 0, st.sz + 1); ft.rotation.y = Math.PI / 2; set.add(ft);
+    air.add(set); AIRSIDE.turnSets.push({ set, R }); }
+  for (const m of AIRSIDE.movers) if (m.route?.stand) { m.tug = pushbackTug(); m.tug.userData.dynamic = true; m.tug.visible = false; air.add(m.tug); }
   // three of the academy's trainers flying touch-and-go circuits (see buildCircuit and stepCircuits)
   AIRSIDE.circuit = buildCircuit();
   for (let i = 0; i < 3; i++) {
@@ -3521,7 +3667,95 @@ function ribbon(lines, y0, mat, parent, uvScale = 12, step = 0) {
 }
 /** Taxiway paint as at a real airport: black-bordered yellow centrelines, double yellow edge lines (left open at
  *  junctions, where another taxiway joins), and at each runway entry the hold-short bars with red runway signs on the ground. */
-function paintTaxiways(tx, A, yellow, parent) {
+/** The training field's taxiways, drawn as a pilot sees them: rounded fillets of pavement wherever a link meets K or
+ *  the runway, so an aircraft can swing round; double yellow edge lines that run on unbroken round those fillets
+ *  (stopping only where an apron opens onto K); and centrelines that curve from K into every link. Returns what
+ *  paintTaxiways paints (the fillet pavement is laid here). */
+const HANGAR_FRONTS = [[-950, 4.6], [-1070, 4.6], [-1190, 4.6], [400, 4.6], [548, 7.2]]; // (x, scale) of the hangar row, as buildHangars lays it
+function trainingTaxiways(A, parent, tm) {
+  const K = A.taxiways.find((t) => t[1] === 'K'); if (!K) return null;
+  const w = K[0], hw = w / 2, kx0 = K[2], kx1 = K[K.length - 2], Z = TWY_Z;
+  const links = A.taxiways.filter((t) => /^J/.test(t[1])).map((t) => t[2]).sort((a, b) => a - b);
+  const R = 25, RR = 20, rz = RWY_Z + 30, SR = 12, sw = 7;               // fillet radii; the runway shoulder's edge; the school's links
+  const arc = (cx, cz, r, a0, a1, n = 16) => { const p = []; for (let i = 0; i <= n; i++) { const a = a0 + (a1 - a0) * i / n; p.push([cx + Math.cos(a) * r, cz + Math.sin(a) * r]); } return p; };
+  // a fillet where a link (centre lx, half-width lhw) leaves an edge line z = ez, running off toward dir (-1 north, +1 south), on side s
+  const F = (lx, lhw, ez, s, r, dir) => ({ ox: lx + s * (lhw + r), oz: ez + dir * r, aE: -dir * Math.PI / 2, aL: s > 0 ? (dir < 0 ? Math.PI : -Math.PI) : 0, c: [lx + s * lhw, ez], r });
+  const fillets = [], ok = (x, s, r) => (s < 0 ? x - hw - r > kx0 + 2 : x + hw + r < kx1 - 2);
+  const kN = (x, s) => F(x, hw, Z - hw, s, R, -1), rN = (x, s) => F(x, hw, rz, s, RR, 1), kS = (x, s) => F(x, sw, Z + hw, s, SR, 1);
+  for (const x of links) for (const s of [-1, 1]) { if (ok(x, s, R)) fillets.push(kN(x, s)); fillets.push(rN(x, s)); }
+  for (const x of RAMP.links) for (const s of [-1, 1]) fillets.push(kS(x, s));
+  // painted signs on K before every link, for traffic either way: where you are (K) and which way the link goes
+  const sign = (txt, loc) => new THREE.MeshStandardMaterial({ roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    map: canvasTex(256, 128, (c, w, h) => { c.fillStyle = loc ? '#141414' : '#e0b52c'; c.fillRect(0, 0, w, h); if (loc) { c.strokeStyle = '#e0b52c'; c.lineWidth = 8; c.strokeRect(10, 10, w - 20, h - 20); }
+      c.fillStyle = loc ? '#e0b52c' : '#141414'; c.font = FONT(800, 78, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, w / 2, h / 2 + 4); }) });
+  const locK = sign('K', true);
+  for (const t of A.taxiways.filter((q) => /^J/.test(q[1]))) {
+    const x = t[2], dir = sign(t[1] + ' ↑', false);
+    for (const [sx, sz] of [[-1, 1], [1, -1]]) {                                  // eastbound on the south half, westbound on the north
+      const zz = Z + sz * 5.2, x0 = x + sx * (hw + R + 18);
+      if (x0 < kx0 + 6 || x0 > kx1 - 6) continue;
+      panel(6, 3, locK, x0 - sx * 3.4, 0.07, zz, 'up', parent, { cast: false, receive: true });
+      panel(6, 3, dir, x0 + sx * 3.4, 0.07, zz, 'up', parent, { cast: false, receive: true });
+    }
+  }
+  // upright boards beside K before every link: where you are (K, black) and which way the link lies (yellow)
+  const frame = new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.7 });
+  const board = (x, z, face, txt) => {
+    const m = new THREE.MeshStandardMaterial({ roughness: 0.55, emissive: 0xffffff, emissiveIntensity: 0.1, map: canvasTex(512, 128, (c, w, h) => {
+      c.fillStyle = '#141414'; c.fillRect(0, 0, w * 0.36, h); c.fillStyle = '#e0b52c'; c.fillRect(w * 0.36, 0, w * 0.64, h);
+      c.strokeStyle = '#e0b52c'; c.lineWidth = 6; c.strokeRect(9, 9, w * 0.36 - 18, h - 18);
+      c.font = FONT(800, 80, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillStyle = '#e0b52c'; c.fillText('K', w * 0.18, h / 2 + 4); c.fillStyle = '#141414'; c.fillText(txt, w * 0.68, h / 2 + 4); }) });
+    const s = face === '-x' ? -1 : 1;
+    box(0.22, 1.0, 3.9, frame, x, 0.95, z, parent, { cast: true, receive: true });
+    panel(3.7, 0.92, m, x + s * 0.12, 0.95, z, face, parent, { cast: false, receive: false });
+    for (const dz of [-1.4, 1.4]) cyl(0.05, 0.05, 0.5, frame, x, 0.25, z + dz, parent, 6, { cast: false, receive: true });
+  };
+  for (const t of A.taxiways.filter((q) => /^J/.test(q[1]))) {
+    const x = t[2], xe = x - (hw + R + 30), xw = x + (hw + R + 30);
+    if (xe > kx0 + 6) board(xe, Z + hw + 6, '-x', '← ' + t[1]);       // eastbound: the link is on the left
+    if (xw < kx1 - 6) board(xw, Z - hw - 6, '+x', t[1] + ' →');       // westbound: on the right
+  }
+  // the pavement: each fillet is its corner plus the arc, one mesh
+  const geos = fillets.map((f) => { const pts = [f.c, ...arc(f.ox, f.oz, f.r, f.aE, f.aL)].map(([x, z]) => new THREE.Vector2(x, -z));
+    const g = new THREE.ShapeGeometry(new THREE.Shape(pts)); g.rotateX(-Math.PI / 2); const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / 12, -uv.getY(i) / 12); return g; });
+  const fm = new THREE.Mesh(mergeGeometries(geos), tm); fm.position.y = 0.026; fm.receiveShadow = true; parent.add(fm);
+  // centrelines curving off K into every link (and into the school's links), alongside the straight ones
+  const curves = [];
+  for (const x of links) for (const s of [-1, 1]) if (ok(x, s, R)) { const Rc = R + hw; curves.push(arc(x + s * Rc, Z - Rc, Rc, Math.PI / 2, s > 0 ? Math.PI : 0, 24)); }
+  for (const x of RAMP.links) for (const s of [-1, 1]) { const Rc = SR + sw; curves.push(arc(x + s * Rc, Z + Rc, Rc, -Math.PI / 2, s > 0 ? -Math.PI : 0, 20)); }
+  // edges, inset d from the pavement's boundary: continuous chains from the runway, down a link, round its fillet, along K
+  const edges = (d) => {
+    const out = [], fa = (f) => arc(f.ox, f.oz, f.r + d, f.aE, f.aL);        // a fillet's edge arc, from its edge line to its link
+    const up = (x, s) => [...(ok(x, s, R) ? fa(kN(x, s)) : [[x + s * (hw - d), Z - hw + d]]), ...fa(rN(x, s)).reverse()];
+    // north side of K: from K's west end, link to link, to its east end
+    let run = [[kx0 + d, Z - hw + d]];
+    links.forEach((x, i) => { run.push(...up(x, -1)); out.push(run); run = up(x, 1).reverse(); });
+    run.push([kx1 - d, Z - hw + d]); out.push(run);
+    // south side: broken only where an apron opens onto K, rounding into the school's links
+    const gaps = [];
+    for (const a of A.aprons ?? []) { let x0 = 1e9, x1 = -1e9, z0 = 1e9; for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); z0 = Math.min(z0, a[i + 1]); } if (Math.abs(z0 - (Z + hw)) < 4) gaps.push([x0, x1, null]); }
+    for (const [hx, sc] of HANGAR_FRONTS) { const half = (12.98 * sc + 16) / 2; gaps.push([hx - half, hx + half, null]); }
+    for (const x of RAMP.links) gaps.push([x - sw - SR, x + sw + SR, x]);
+    gaps.sort((a, b) => a[0] - b[0]);
+    const zs = Z + hw - d, ze = -93.5;                                       // (the school's links end at the ramp's edge)
+    run = [[kx0 + d, zs]];
+    for (const [g0, g1, lx] of gaps) {
+      if (lx == null) { run.push([g0, zs]); out.push(run); run = [[g1, zs]];
+        for (let a = g0 + 1.5; a < g1 - 3; a += 6) out.push([[a, zs], [a + 3, zs]]);   // broken here: the apron's edge may be crossed
+        continue; }
+      const f0 = kS(lx, -1), f1 = kS(lx, 1);
+      run.push(...fa(f0), [lx - (sw - d), ze]); out.push(run);
+      run = [[lx + (sw - d), ze], ...fa(f1).reverse()];
+    }
+    run.push([kx1 - d, zs]); out.push(run);
+    // K's two ends
+    for (const x of [kx0 + d, kx1 - d]) out.push([[x, Z - hw + d], [x, Z + hw - d]]);
+    return out.filter((r) => r.length > 1);
+  };
+  return { curves, edges };
+}
+function paintTaxiways(tx, A, yellow, parent, net = null) {
   const paint = (hex) => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   const black = weather(paint(0x1a1a1a), 'tpaint'), yel = yellow.clone(); yel.polygonOffset = true; yel.polygonOffsetFactor = -3; yel.polygonOffsetUnits = -3;
   weather(yel, 'tpaint');
@@ -3531,8 +3765,9 @@ function paintTaxiways(tx, A, yellow, parent) {
     return [x - tz2 * d, z + tx2 * d];
   });
   // centrelines: yellow on a black border, so they read on pale concrete as well as asphalt
-  ribbon(tx.map(([, pts]) => [1.0, pts]), 0.05, black, parent);
-  ribbon(tx.map(([, pts]) => [0.45, pts]), 0.056, yel, parent);
+  const cl = [...tx.map(([, pts]) => pts), ...(net?.curves ?? [])];
+  ribbon(cl.map((pts) => [1.0, pts]), 0.05, black, parent);
+  ribbon(cl.map((pts) => [0.45, pts]), 0.056, yel, parent);
   // junctions: every taxiway end, and wherever two taxiways share a point
   const seen = new Map(), J = [];
   const k = (x, z) => `${Math.round(x / 4)},${Math.round(z / 4)}`;
@@ -3546,8 +3781,9 @@ function paintTaxiways(tx, A, yellow, parent) {
   const nearJ = (x, z, r) => { const gx = Math.floor(x / G), gz = Math.floor(z / G);
     for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const p of grid.get(`${gx + i},${gz + j}`) ?? []) if (Math.hypot(p[0] - x, p[1] - z) < r) return true;
     return false; };
-  // edges: two thin yellow lines each side, broken off where they would cut across a joining taxiway
-  const edges = [];
+  // edges: two thin yellow lines each side; the training field's run on unbroken round its fillets
+  const edges = net ? [...net.edges(0.5), ...net.edges(0.85)].map((pts) => [0.15, pts]) : [];
+  if (!net)
   for (const [w, pts] of tx) for (const sd of [-1, 1]) for (const d of [w / 2 - 0.9, w / 2 - 1.35]) {
     const o = off(pts, sd * d);
     // resample to ~6 m so the breaks fall close to the junctions
@@ -3612,6 +3848,10 @@ function paintTaxiways(tx, A, yellow, parent) {
       quad([x, z], [ax, az], [rx, rz], w - 1, 3.2, holdMat, 0.06);
       const txt = named(x, z);
       holdSign(parent, x - rx * 2, z - rz * 2, rx, rz, w, txt);
+      // runway guard lights: a yellow pair either side, flashing in turn; a red stop bar along the hold line
+      for (const s2 of [-1, 1]) blinker(glowPoints([[x + ax * s2 * (w / 2 + 2.2), 0.75, z + az * s2 * (w / 2 + 2.2)]], 0xffc21a, 3.4, parent), 1.0, s2 > 0 ? 0.5 : 0, 0.5);
+      const bar = []; for (let k = -w / 2 + 1.5; k <= w / 2 - 1.4; k += 2.5) bar.push([x + ax * k + rx * 1.9, 0.22, z + az * k + rz * 1.9]);
+      glowPoints(bar, 0xff2a1a, 1.7, parent);
       for (const s2 of [-1, 1]) quad([x - rx * 7 + ax * s2 * (w / 4), z - rz * 7 + az * s2 * (w / 4)], [ax, az], [rx, rz], w / 2 - 2.5, 3.6, signMat(txt), 0.06);
       // the enhanced centreline: dashed yellow either side of the centreline for the last 45 m before the bar
       for (let d = 3; d < 47; d += 4) for (const s2 of [-1, 1]) quad([x - rx * d + ax * s2 * 0.62, z - rz * d + az * s2 * 0.62], [ax, az], [rx, rz], 0.15, 2.6, yel, 0.058);
@@ -3685,9 +3925,9 @@ function buildIGI(air, { white, yellow, tarmacAt, apronMat }) {
   ASPHALT.push(tm);
   weather(tm, 'taxi');
   ribbon(tx, 0.028, tm, igi, 12, 0.004); // pavement 28-40 mm up; all paint sits above it
-  ribbon(fillK, 0.045, tm, igi);         // the filler K on top of the OSM pieces it covers
-  tx.push(...fillK);
-  paintTaxiways(tx, A, yellow, igi);
+  if (FIELD === 'delhi') { ribbon(fillK, 0.045, tm, igi); tx.push(...fillK); } // the filler K on top of the OSM pieces it covers
+  const net = FIELD === 'training' ? trainingTaxiways(A, igi, tm) : null;   // fillets, unbroken edges, curved centrelines
+  paintTaxiways(tx, A, yellow, igi, net);
   const tc = [], te = [];
   for (const [w, pts] of tx) for (let i = 1; i < pts.length; i++) {
     const [x0, z0] = pts[i - 1], [x1, z1] = pts[i], L = Math.hypot(x1 - x0, z1 - z0); if (!L) continue;
@@ -3732,8 +3972,19 @@ function buildIGI(air, { white, yellow, tarmacAt, apronMat }) {
   // T1 is domestic; T3 has the international carriers too
   const T1L = ['n_igo', 'n_igo', 'n_igo', 'n_iad', 'n_aic', 'n_vti'], T3L = ['n_igo', 'n_aic', 'n_vti', 'n_iad', 'b_vir', 'b_baw', 'b_ana', 'b_eth', 'b_tha', 'b_msr', 'b_gfa', 'n_kac', 'n_jzr', 'n_kne', 'n_oms', 'n_gfa', 'n_alk', 'n_drk', 'n_axm'];
   const tails = [M.paintNavy, new THREE.MeshStandardMaterial({ color: 0xa8322d, roughness: 0.7 }), new THREE.MeshStandardMaterial({ color: 0x1f7a7a, roughness: 0.7 }), new THREE.MeshStandardMaterial({ color: 0xd9792b, roughness: 0.7 })];
+  if (FIELD !== 'delhi' && A.stands?.length) { const xs = A.stands.map((s) => s[0]); vehicleLane(Math.min(...xs) - 34, Math.max(...xs) + 34, A.stands[0][1] - 42, air); // (behind the tails)
+    // apron floodlights: masts between the stands, lamps turned on the aircraft, glowing brighter at dusk
+    const steel = new THREE.MeshStandardMaterial({ color: 0x8d9399, roughness: 0.5, metalness: 0.6 }), lampF = new THREE.MeshStandardMaterial({ color: 0xf4f2ea, roughness: 0.3, emissive: 0xfff0cc, emissiveIntensity: 0.4 });
+    lampF.userData.dayE = 0.4; LAMP_MATS.push(lampF);
+    const heads = [];
+    for (let i = 0; i <= xs.length; i++) { const mx = Math.min(...xs) - 30 + i * 60, mz = A.stands[0][1] - 60;
+      cyl(0.22, 0.32, 22, steel, mx, 11, mz, air, 10, { cast: true, receive: true }); box(4.2, 0.25, 0.6, steel, mx, 22.1, mz, air, { cast: true, receive: true });
+      for (const dx of [-1.6, -0.55, 0.55, 1.6]) { box(0.85, 0.55, 0.3, lampF, mx + dx, 21.7, mz + 0.45, air, { cast: false, receive: false }).rotation.x = 0.5; heads.push([mx + dx, 21.6, mz + 0.6]); }
+      lightPool(mx, mz + 28, 46, 50, air, 0.32); }
+    glowPoints(heads, 0xfff0c8, 4.5, air); }
   for (const [x, z, standName] of A.stands) {
-    if (FIELD !== 'delhi') standNumber(x, z, standName, air);
+    if (FIELD !== 'delhi') standMarks(x, z - 14.8 + 18.8, String(standName).replace(/\D/g, ''), air); // (nose of an A320 parked nose-in)
+    if (MOVER_STANDS.includes(standName) && FIELD !== 'delhi') continue; // (the turnaround stands: kept for the arrivals)
     if (rnd() > 0.82) continue; // some stands stand empty
     const b = bridgeAt(x, z);
     let dx, dz;
@@ -3752,6 +4003,48 @@ function buildIGI(air, { white, yellow, tarmacAt, apronMat }) {
   }
 }
 /** the stand's number painted on the apron in front of it, read from the taxiway */
+/** A nose-in stand painted to ICAO practice (after the BZD419 apron sheet): the yellow lead-in from the taxiway
+ *  centreline with turn-ins from both ways, type-labelled nose-wheel stop bars, the red stand safety line round the
+ *  aircraft's envelope, a red-hatched equipment restraint area by the nose, red-framed service pits, and the stand
+ *  number box where the lead-in leaves the taxiway. Nose at (x, nz), the aircraft lying toward -z, K at z = TWY_Z. */
+const STANDPAINT = {};
+function standMarks(x, nz, no, parent) {
+  const S = STANDPAINT, P = (hex, off) => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: off, polygonOffsetUnits: off });
+  S.yel ??= P(0xe0b52c, -4); S.blk ??= P(0x161616, -3); S.red ??= P(0xc8201b, -4); S.wht ??= P(0xeeeeea, -4);
+  S.hatch ??= new THREE.MeshStandardMaterial({ transparent: true, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+    map: canvasTex(256, 256, (c, w, h) => { c.strokeStyle = '#c8201b'; c.lineWidth = 7; c.strokeRect(4, 4, w - 8, h - 8); c.lineWidth = 6; for (let k = -h; k < w; k += 26) { c.beginPath(); c.moveTo(k, h); c.lineTo(k + h, 0); c.stroke(); } }) });
+  S.pit ??= new THREE.MeshStandardMaterial({ transparent: true, roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    map: canvasTex(64, 64, (c, w, h) => { c.strokeStyle = '#c8201b'; c.lineWidth = 6; c.strokeRect(5, 5, w - 10, h - 10); c.fillStyle = '#e0b52c'; c.beginPath(); c.arc(w / 2, h / 2, 12, 0, 7); c.fill(); c.fillStyle = '#2b2b2b'; c.beginPath(); c.arc(w / 2, h / 2, 6, 0, 7); c.fill(); }) });
+  const line = (x0, z0, x1, z1, wd, mat, y) => { const m = box(Math.hypot(x1 - x0, z1 - z0), 0.008, wd, mat, (x0 + x1) / 2, y, (z0 + z1) / 2, parent, { cast: false }); m.rotation.y = Math.atan2(-(z1 - z0), x1 - x0); return m; };
+  const guide = (x0, z0, x1, z1) => { line(x0, z0, x1, z1, 0.6, S.blk, 0.062); line(x0, z0, x1, z1, 0.26, S.yel, 0.066); };
+  const stop = nz - 1.2, R = 26, k = TWY_Z;
+  guide(x, stop, x, k + R);                                                          // the lead-in
+  for (const s of [-1, 1]) for (let i = 0; i < 10; i++) {                           // turn-ins off K from either way
+    const a = Math.PI / 2 * i / 10, b = Math.PI / 2 * (i + 1) / 10, cx = x + s * R, cz = k + R;
+    guide(cx - s * Math.cos(a) * R, cz - Math.sin(a) * R, cx - s * Math.cos(b) * R, cz - Math.sin(b) * R);
+  }
+  // nose-wheel stop bars with their type boards
+  const types = ['A321', 'A320', 'B738'];
+  types.forEach((t, i) => { const z = stop - i * 2.4; line(x - 2.2, z, x + 2.2, z, 0.55, S.blk, 0.063); line(x - 2, z, x + 2, z, 0.28, S.yel, 0.067);
+    const tex = canvasTex(192, 64, (c, w, h) => { c.fillStyle = '#141414'; c.fillRect(0, 0, w, h); c.fillStyle = '#e0b52c'; c.font = FONT(800, 44, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(t, w / 2, h / 2 + 2); });
+    panel(2.6, 0.9, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -4 }), x - 4, 0.068, z, 'up', parent, { cast: false, receive: true }); });
+  // the stand safety line: narrow at the nose, out round the wings, back past the tail
+  const W = 22.5, red = (x0, z0, x1, z1) => line(x0, z0, x1, z1, 0.25, S.red, 0.064);
+  for (const s of [-1, 1]) { red(x + s * 6, nz + 3, x + s * W, nz - 16); red(x + s * W, nz - 16, x + s * W, nz - 44); }
+  red(x - 6, nz + 3, x - 1.2, nz + 3); red(x + 1.2, nz + 3, x + 6, nz + 3);
+  // equipment restraint area beside the nose, service pits under the wings
+  panel(11, 13, S.hatch, x - 14, 0.061, nz - 5, 'up', parent, { cast: false, receive: true });
+  for (const [dx, dz] of [[-9, -17], [9, -17], [-9, -27], [9, -27]]) panel(1.3, 1.3, S.pit, x + dx, 0.067, nz + dz, 'up', parent, { cast: false, receive: true });
+  // the stand number where the lead-in leaves K
+  const nt = canvasTex(192, 96, (c, w, h) => { c.fillStyle = '#141414'; c.fillRect(0, 0, w, h); c.fillStyle = '#e0b52c'; c.fillRect(6, 6, w - 12, h - 12); c.fillStyle = '#141414'; c.font = FONT(800, 62, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(no, w / 2, h / 2 + 3); });
+  panel(4.2, 2.1, new THREE.MeshStandardMaterial({ map: nt, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -4 }), x + 2.6, 0.068, k + R + 6, 'up', parent, { cast: false, receive: true });
+}
+/** a vehicle lane across an apron: solid white edges, a dashed centre */
+function vehicleLane(x0, x1, z, parent) {
+  const m = STANDPAINT.wht ?? (STANDPAINT.wht = new THREE.MeshStandardMaterial({ color: 0xeeeeea, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
+  for (const dz of [-4, 4]) box(x1 - x0, 0.008, 0.2, m, (x0 + x1) / 2, 0.064, z + dz, parent, { cast: false });
+  for (let x = x0; x < x1 - 3; x += 6) box(3, 0.008, 0.15, m, x + 1.5, 0.064, z, parent, { cast: false });
+}
 function standNumber(x, z, name, parent) {
   const n = String(name).replace(/\D/g, '');
   const m = panel(6, 6, new THREE.MeshStandardMaterial({ transparent: true, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -4,
@@ -3780,9 +4073,9 @@ const HANGARS = [];
 function buildHangars(air, apronMat) {
   const zf = -70; // door line
   const H = [
-    { x: -450, logo: 'air-india', band: '#d61f35', jet: 'n_aic' },
-    { x: -570, logo: 'indigo', band: '#0b1f8f', jet: 'n_igo' },
-    { x: -690, logo: 'akasa-air', band: '#ff6a2b', jet: null },
+    { x: -950, logo: 'air-india', band: '#d61f35', jet: 'n_aic' },
+    { x: -1070, logo: 'indigo', band: '#0b1f8f', jet: 'n_igo' },
+    { x: -1190, logo: 'akasa-air', band: '#ff6a2b', jet: null },
     { x: 400, logo: 'airbus', band: '#14205b', jet: 'house' },
     { x: 548, logo: 'boeing', band: '#0b3fa8', jet: 'b_vir', s: 7.2 },
   ];
@@ -3807,8 +4100,9 @@ function buildHangars(air, apronMat) {
     }
     lightPool(h.x, cz, W * 0.9, D, air, 0.45, 0.09);
     // the apron in front, out to the taxiway edge, with a lead-in line
-    const am = apronMat.clone(); am.map = repeatOf(apronMat.map, (W + 16) / 22, 36 / 22); am.polygonOffset = true; am.polygonOffsetFactor = -2; am.polygonOffsetUnits = -2; CONCRETE_GROUND.push(am);
-    panel(W + 16, 36, am, h.x, 0.09, zf - 18, 'up', air);
+    const ad = zf - (TWY_Z + 11.5);                                               // out to K's edge
+    const am = apronMat.clone(); am.map = repeatOf(apronMat.map, (W + 16) / 22, ad / 22); am.polygonOffset = true; am.polygonOffsetFactor = -2; am.polygonOffsetUnits = -2; CONCRETE_GROUND.push(am);
+    panel(W + 16, ad, am, h.x, 0.09, zf - ad / 2, 'up', air);
     // the lead-in line: off K's centreline, straight in through the door
     const lz0 = TWY_Z, lz1 = zf + D * 0.7;
     panel(0.35, lz1 - lz0, yel, h.x, 0.1, (lz0 + lz1) / 2, 'up', air, { cast: false, receive: false });
@@ -3855,7 +4149,10 @@ function buildHangars(air, apronMat) {
  *  trolleys, an avgas island at the west end, a refuel under way, pilots walking round before flight; two links
  *  out across the grass to taxiway K, at J3 (x -150) and x 190. Spots -60 and 60 are the cadet's and the taxiing
  *  trainer's (see buildCadetRoute, buildFieldExtras). */
-const RAMP = { z: -58, lane: -80, cadetX: -60, taxiX: 60, links: [-150, 160] };
+const RAMP = { z: -64, lane: -80, cadetX: -60, taxiX: 6, links: [-150, 160] };
+// the school's ramp: two compact rows, the front one nose to the lane, the back one staggered behind its gaps
+const RAMP_SPOTS = [...[-148, -126, -104, -82, -60, -38, -16, 6].map((x) => [x, -64, 1]), ...[-137, -115, -93, -71, -49, -27, -5].map((x) => [x, -46, 2])];
+const RAMPCREW = [];                                                         // the ramp workers' animation mixers
 function buildRamp(air, { yellow, white, tarmacAt, blob }) {
   const g = new THREE.Group(), o = { cast: true, receive: true }, K = kitMats();
   const red = new THREE.MeshStandardMaterial({ color: 0xc8201b, roughness: 0.55 }), rope = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.9 });
@@ -3864,15 +4161,18 @@ function buildRamp(air, { yellow, white, tarmacAt, blob }) {
   // the lane and its links to K: centrelines, the links' pavement over the grass, a holding position on each
   box(410, 0.01, 0.3, yellow, -30, 0.036, RAMP.lane, air, { cast: false });
   for (const lx of RAMP.links) {
-    panel(14, 13, tarmacAt(14, 13), lx, 0.025, -100, 'up', air);
-    box(0.3, 0.01, 38, yellow, lx, 0.04, -99, air, { cast: false });
-    for (const [dz, dash] of [[-102.5, false], [-103.2, false], [-104.2, true], [-104.9, true]]) for (let x = -6; x < 6; x += dash ? 1.2 : 12) box(dash ? 0.7 : 12, 0.01, 0.18, yellow, lx + (dash ? x + 0.35 : 0), 0.042, dz, air, { cast: false });
+    const k0 = -93.5, k1 = TWY_Z + 11.5;                                     // from the apron's edge to K's
+    panel(14, k0 - k1, tarmacAt(14, k0 - k1), lx, 0.025, (k0 + k1) / 2, 'up', air);
+    box(0.3, 0.01, RAMP.lane - TWY_Z, yellow, lx, 0.04, (RAMP.lane + TWY_Z) / 2, air, { cast: false });
+    for (const [dz, dash] of [[TWY_Z + 15.5, false], [TWY_Z + 14.8, false], [TWY_Z + 13.8, true], [TWY_Z + 13.1, true]]) for (let x = -6; x < 6; x += dash ? 1.2 : 12) box(dash ? 0.7 : 12, 0.01, 0.18, yellow, lx + (dash ? x + 0.35 : 0), 0.042, dz, air, { cast: false });
   }
-  for (let i = 0, x = -204; x <= 156; x += 24, i++) {
-    // the painted T: a lead line from the lane, the bar the main wheels stop on
-    box(0.25, 0.01, Z + 1.2 - RAMP.lane, yellow, x, 0.036, (RAMP.lane + Z + 1.2) / 2, air, { cast: false });
-    box(6, 0.01, 0.25, yellow, x, 0.036, Z + 1.2, air, { cast: false });
-    if (x === RAMP.cadetX || x === RAMP.taxiX) continue;                                   // (theirs: out flying, or about to)
+  RAMP_SPOTS.forEach(([x, sz, row], i) => {
+    // the painted T: a lead line in (from the lane, or through the front row's gap), the bar the main wheels stop on
+    const l0 = row === 1 ? RAMP.lane : sz - 14;
+    box(0.25, 0.01, sz + 1.2 - l0, yellow, x, 0.036, (l0 + sz + 1.2) / 2, air, { cast: false });
+    box(6, 0.01, 0.25, yellow, x, 0.036, sz + 1.2, air, { cast: false });
+    const Z = sz;
+    if (row === 1 && (x === RAMP.cadetX || x === RAMP.taxiX)) return;                     // (theirs: out flying, or about to)
     const tr = bakeGroup(trainer(fleet[i % 2])); tr.position.set(x, 0, Z); tr.rotation.y = Math.PI / 2; tr.userData.dynamic = true;
     air.add(tr); AIRSIDE.placeholders.trainers.push(tr); blob(x, Z, 11, 9);
     for (const s of [-1, 1]) { box(0.35, 0.18, 0.2, K.yel, x + s * 1.25, 0.09, Z + 0.55, g, o);                 // main-wheel chocks
@@ -3881,11 +4181,11 @@ function buildRamp(air, { yellow, white, tarmacAt, blob }) {
       cyl(0.09, 0.09, 0.05, steel, x + s * 4.32, 0.03, Z + 0.15, g, 10, o); }
     box(0.35, 0.18, 0.2, K.yel, x, 0.09, Z - 3.2, g, o);                                                       // nose-wheel chock
     box(0.05, 0.32, 0.02, red, x + 2.4, 1.72, Z - 0.7, g, { cast: false, receive: true });                      // remove-before-flight flag
-    if (i % 4 === 1) { cyl(0.16, 0.16, 0.75, red, x + 12, 0.55, Z - 2, g, 12, o); box(0.5, 0.06, 0.4, steel, x + 12, 0.16, Z - 2, g, o); // an extinguisher trolley
-      for (const s of [-1, 1]) cyl(0.12, 0.12, 0.05, rope, x + 12 + s * 0.22, 0.12, Z - 2, g, 10, o).rotation.x = Math.PI / 2; }
-  }
+    if (i % 4 === 1) { cyl(0.16, 0.16, 0.75, red, x + 11, 0.55, Z - 2, g, 12, o); box(0.5, 0.06, 0.4, steel, x + 11, 0.16, Z - 2, g, o); // an extinguisher trolley
+      for (const s of [-1, 1]) cyl(0.12, 0.12, 0.05, rope, x + 11 + s * 0.22, 0.12, Z - 2, g, 10, o).rotation.x = Math.PI / 2; }
+  });
   // a tow bar left by the second trainer
-  box(0.08, 0.08, 2.4, K.yel, -180 + 1.3, 0.18, Z - 6.2, g, o).rotation.y = 0.5;
+  box(0.08, 0.08, 2.4, K.yel, -126 + 1.3, 0.18, Z - 6.2, g, o).rotation.y = 0.5;
   // the avgas island: a kerbed slab, two pumps, a canopy and its sign
   const IX = -236, IZ = -76;
   box(10, 0.25, 4, white, IX, 0.125, IZ, g, o);
@@ -3895,8 +4195,8 @@ function buildRamp(air, { yellow, white, tarmacAt, blob }) {
   const avgas = new THREE.MeshStandardMaterial({ roughness: 0.6, emissive: 0xffffff, emissiveIntensity: 0.1, map: canvasTex(512, 96, (c, w, h) => { c.fillStyle = '#c8201b'; c.fillRect(0, 0, w, h); c.fillStyle = '#fff'; c.font = FONT(800, 58, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('AVGAS 100LL', w / 2, h / 2 + 2); }) });
   panel(5.4, 1, avgas, IX, 4.3, IZ - 2.52, '-z', g, { cast: false, receive: false });
   // a refuel under way at the east end of the line: the bowser by the wing, its hose up to the filler
-  const bw = fuelTruck(); bw.position.set(146, 0, Z - 8.5); bw.rotation.y = 0; air.add(bw); blob(146, Z - 8.5, 9, 5);
-  box(0.06, 0.06, 6.8, rope, 136, 1.0, Z - 4.8, g, o).rotation.x = 0.28;
+  const BX = -27, bw = fuelTruck(); bw.position.set(BX, 0, Z - 8.5); bw.rotation.y = 0; air.add(bw); blob(BX, Z - 8.5, 9, 5);
+  box(0.06, 0.06, 6.8, rope, BX - 10, 1.0, Z - 4.8, g, o).rotation.x = 0.28;
   // ---- the rest of a working flight line ----
   const navyM = M.paintNavy, glassM = new THREE.MeshStandardMaterial({ color: 0x1b2a44, roughness: 0.12, metalness: 0.4 });
   const walkM = new THREE.MeshStandardMaterial({ color: 0x2f8a4c, roughness: 0.85 }), tyreM = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
@@ -3906,13 +4206,13 @@ function buildRamp(air, { yellow, white, tarmacAt, blob }) {
   const numMat = new THREE.MeshStandardMaterial({ roughness: 0.85, alphaTest: 0.35, map: canvasTex(1024, 64, (c, w, h) => {
     c.fillStyle = '#e2b52c'; c.font = FONT(800, 50, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle';
     for (let k = 0; k < 16; k++) c.fillText(String(k + 1), (k + 0.5) * 64, h / 2 + 3); }) });
-  for (let k = 0, x = -204; x <= 156; x += 24, k++) {
+  for (let k = 0; k < RAMP_SPOTS.length; k++) { const [x, sz, row] = RAMP_SPOTS[k];
     const geo = new THREE.PlaneGeometry(2.4, 2.4), uv = geo.attributes.uv; for (let j = 0; j < uv.count; j++) uv.setX(j, (k + uv.getX(j)) / 16);
-    const m = new THREE.Mesh(geo, numMat); m.rotation.x = -Math.PI / 2; m.position.set(x + 2, 0.04, RAMP.lane + 6); m.receiveShadow = true; g.add(m);
+    const m = new THREE.Mesh(geo, numMat); m.rotation.x = -Math.PI / 2; m.position.set(x + 2, 0.04, row === 1 ? RAMP.lane + 6 : sz - 10); m.receiveShadow = true; g.add(m);
   }
   // the flight-line hut behind the line: dispatch and the kettle; a window on the aircraft, a bench, a green safety
   // walkway in from the campus with bollards at its mouth, and the instructors' buggy
-  const HX = -96, HZ = -38;
+  const HX = 40, HZ = -38;                                                    // (east of the rows)
   box(6.4, 3, 3.6, K.white, HX, 1.5, HZ, g, o); box(7.4, 0.25, 4.6, navyM, HX, 3.12, HZ, g, o);
   box(5.2, 1.1, 0.06, glassM, HX, 1.85, HZ - 1.82, g, o); box(1.0, 2.1, 0.06, navyM, HX + 2.3, 1.05, HZ + 1.82, g, o);
   const lineSign = new THREE.MeshStandardMaterial({ roughness: 0.6, emissive: 0xffffff, emissiveIntensity: 0.08, map: canvasTex(512, 96, (c, w, h) => {
@@ -3933,13 +4233,13 @@ function buildRamp(air, { yellow, white, tarmacAt, blob }) {
   // a small tug for the trainers, by the tow bar
   { const t = new THREE.Group(); box(1.9, 0.6, 1.1, K.yel, 0, 0.45, 0, t, o); box(0.5, 0.45, 0.6, K.dark, -0.4, 0.95, 0, t, o); box(0.08, 0.7, 0.08, steel, 0.7, 1.05, 0, t, o);
     box(0.5, 0.06, 0.06, K.dark, 0.7, 1.4, 0, t, o); wheelsAt(t, [[0.6, -0.58], [0.6, 0.58], [-0.6, -0.58], [-0.6, 0.58]], 0.24, 0.2);
-    t.position.set(-183, 0, Z - 9); t.rotation.y = 0.5; g.add(t); }
+    t.position.set(-162, 0, Z - 9); t.rotation.y = 0.5; g.add(t); }
   // battery start carts at two trainers, their cables up to the cowling
-  for (const x of [-156, 12]) { box(1.1, 0.6, 0.7, red, x + 2.4, 0.55, Z - 5, g, o); box(1.12, 0.12, 0.72, K.yel, x + 2.4, 0.9, Z - 5, g, o);
+  for (const x of [-126, -38]) { box(1.1, 0.6, 0.7, red, x + 2.4, 0.55, Z - 5, g, o); box(1.12, 0.12, 0.72, K.yel, x + 2.4, 0.9, Z - 5, g, o);
     wheelsAt(g, [[x + 2.0, Z - 5.38], [x + 2.0, Z - 4.62], [x + 2.8, Z - 5.38], [x + 2.8, Z - 4.62]], 0.13, 0.08);
     box(0.04, 0.04, 2.6, rope, x + 1.3, 0.8, Z - 3.9, g, o).rotation.set(0.25, 0.75, 0); }
   // a trainer in for maintenance: a step ladder at the nose, the cowling off on a mat, a tool chest, the engineer
-  { const x = 108;
+  { const x = -104;
     for (const s of [-1, 1]) { const r = box(0.07, 2.1, 0.07, K.yel, x + 1.0 + s * 0.3, 1.0, Z - 4.3, g, o); r.rotation.z = s * 0.12; }
     for (let k = 0; k < 4; k++) box(0.62, 0.04, 0.2, steel, x + 1.0, 0.4 + k * 0.45, Z - 4.3, g, o);
     box(2.2, 0.02, 1.4, K.dark, x - 2.8, 0.02, Z - 6, g, o); box(1.3, 0.35, 0.9, K.white, x - 2.8, 0.2, Z - 6, g, o);
@@ -3965,13 +4265,35 @@ function buildRamp(air, { yellow, white, tarmacAt, blob }) {
   for (const [dx, dz, m] of [[-0.32, -0.32, navyM], [0.32, -0.32, red], [-0.32, 0.32, red], [0.32, 0.32, navyM]]) cyl(0.29, 0.29, 0.88, m, IX - 7 + dx, 0.58, IZ + 2 + dz, g, 14, o);
   box(0.8, 0.7, 0.6, K.yel, IX + 6.6, 0.35, IZ + 2, g, o); box(0.82, 0.08, 0.62, red, IX + 6.6, 0.72, IZ + 2, g, o);
   const kb = bakeGroup(g); kb.userData.dynamic = true; air.add(kb);
+  // ramp crew in hi-vis ("Male Ramp Worker Idle" by Swissport Academy, CC BY 4.0; logos painted out): a few on
+  // the line, by the hut and at the fuel island, each idling in its own time
+  gltfLoader.loadAsync('models/ramp_worker.glb').then((gl) => {
+    const clip = gl.animations[0], src = gl.scene; src.updateMatrixWorld(true);
+    const bb = new THREE.Box3().setFromObject(src), k = 1.78 / (bb.max.y - bb.min.y);
+    for (const [x, z, ry] of [[-126 + 3.5, Z - 4.5, -2.2], [-49 + 2.5, -46 + 4.8, 2.6], [-82 - 3, Z - 6, -0.6], [HX + 2.4, HZ - 3.2, 0.3], [IX + 2.6, IZ - 3.2, 3.0]]) {
+      const w = SkeletonUtils.clone(src); w.scale.setScalar(k); w.position.set(x, -bb.min.y * k, z); w.rotation.y = ry; w.userData.dynamic = true;
+      w.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+      air.add(w);
+      if (clip) { const mx = new THREE.AnimationMixer(w); const a = mx.clipAction(clip); a.time = Math.random() * clip.duration; a.play(); RAMPCREW.push(mx); }
+    }
+  }).catch((e) => console.warn('ramp worker', e));
   // people: a pilot walking round a trainer before flight, an instructor and a student on the line, a refueller
   const walk = (pts, who, speed, t0) => { const p = who; p.userData.dynamic = true; air.add(p);
     AIRSIDE.vehicles.push({ g: p, path: new THREE.CatmullRomCurve3(pts.map(([x, z]) => new THREE.Vector3(x, 0, z)), true), speed, phase: 0, t0 }); };
-  walk([[-132 - 6.5, Z - 1], [-132, Z - 5.5], [-132 + 6.5, Z - 1], [-132 + 3, Z + 4], [-132 - 3, Z + 4]], person(0xf4f3ee), 0.9, 0);
+  walk([[-148 - 6.5, Z - 1], [-148, Z - 5.5], [-148 + 6.5, Z - 1], [-148 + 3, Z + 4], [-148 - 3, Z + 4]], person(0xf4f3ee), 0.9, 0);
   walk([[-6, Z - 12], [30, Z - 12], [40, Z - 14], [30, Z - 16], [-6, Z - 16], [-12, Z - 14]], person(0xf4f3ee), 1.25, 7);
   walk([[-4, Z - 13], [30, Z - 13], [41, Z - 14.6], [30, Z - 15.4], [-4, Z - 15.4], [-11, Z - 14.2]], person(0x2f5f9e), 1.25, 8.5);
-  walk([[138, Z - 6], [142, Z - 3], [148, Z - 4], [144, Z - 7]], crewman(true), 0.6, 3);
+  walk([[BX - 8, Z - 6], [BX - 4, Z - 3], [BX + 2, Z - 4], [BX - 2, Z - 7]], crewman(true), 0.6, 3);
+  // on the move: the instructors' buggy up and down the service road (keeping left), the tug between the rows,
+  // a second bowser shuttling from the fuel island along the front of the line
+  const mkBuggy = () => { const c = new THREE.Group(); box(2.4, 0.4, 1.2, K.white, 0, 0.45, 0, c, o); box(0.6, 0.5, 1.16, K.white, 0.95, 0.85, 0, c, o); box(0.5, 0.5, 1.1, navyM, -0.15, 0.95, 0, c, o);
+    for (const [px, pz] of [[0.9, -0.52], [0.9, 0.52], [-0.95, -0.52], [-0.95, 0.52]]) box(0.05, 1.3, 0.05, steel, px, 1.3, pz, c, o);
+    box(2.2, 0.06, 1.3, navyM, 0, 1.98, 0, c, o); wheelsAt(c, [[0.8, -0.58], [0.8, 0.58], [-0.8, -0.58], [-0.8, 0.58]], 0.22, 0.16); c.add(person(0xf4f3ee)).position.set(-0.1, 0.25, -0.3); return c; };
+  const mkTug = () => { const t = new THREE.Group(); box(1.9, 0.6, 1.1, K.yel, 0, 0.45, 0, t, o); box(0.5, 0.45, 0.6, K.dark, -0.4, 0.95, 0, t, o); box(0.08, 0.7, 0.08, steel, 0.7, 1.05, 0, t, o);
+    wheelsAt(t, [[0.6, -0.58], [0.6, 0.58], [-0.6, -0.58], [-0.6, 0.58]], 0.24, 0.2); return t; };
+  walk([[-240, -34.5], [240, -34.5], [246, -33], [240, -31.5], [-240, -31.5], [-246, -33]], mkBuggy(), 5, 0);
+  walk([[-150, -56], [10, -56], [15, -54.5], [10, -53], [-150, -53], [-155, -54.5]], mkTug(), 2.4, 20);
+  walk([[IX + 6, -88], [-40, -88], [-33, -90], [-40, -92], [IX + 6, -92], [IX, -90]], fuelTruck(), 3.6, 0);
 }
 /** The training field's own buildings, west of the hangar row along taxiway K: a small terminal with a glass airside
  *  front (its five remote stands come from data/airfield.json), the control tower, the fire station, the fuel farm,
@@ -3984,7 +4306,7 @@ function buildFieldBuildings(air) {
   const sign = (txt, w, h, bg = '#111c44', fg = '#ffffff') => new THREE.MeshStandardMaterial({ roughness: 0.6, emissive: 0xffffff, emissiveIntensity: 0.1,
     map: canvasTex(512, Math.round(512 * h / w), (c, cw, ch) => { c.fillStyle = bg; c.fillRect(0, 0, cw, ch); c.fillStyle = fg; c.font = FONT(800, ch * 0.62, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, cw / 2, ch / 2 + 2); }) });
   // terminal: 200 m long, a glazed airside face under a deep canopy, a plant room on the roof
-  const TX = -1060, TZ = -30;
+  const TX = -460, TZ = -30;                                                   // (beside the academy)
   box(200, 9, 24, concrete, TX, 4.5, TZ, g, o);
   box(196, 6.4, 0.3, glass, TX, 4.1, TZ - 12.1, g, { cast: false, receive: true });
   for (let x = -96; x <= 96; x += 6) box(0.25, 6.6, 0.45, dark, TX + x, 4.1, TZ - 12.2, g, o);
@@ -4041,8 +4363,8 @@ function buildFieldExtras(air) {
     map: canvasTex(512, Math.round(512 * h / w), (c, cw, ch) => { c.fillStyle = bg; c.fillRect(0, 0, cw, ch); c.fillStyle = fg; c.font = FONT(800, ch * 0.62, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, cw / 2, ch / 2 + 2); }) });
   // forecourt: two car parks either side of Terminal Road, bay lines, parked cars, flags, palms, a bus shelter
   const bayLine = std(0xeeeeea, 0.8), cars = [];
-  for (const cx of [-1116, -1004]) {
-    panel(88, 28, asphalt(88, 28), cx, 0.045, 16, 'up', g, { cast: false, receive: true });
+  for (const cx of [-516, -404]) {
+    panel(88, 28, parkingMat(88, 28), cx, 0.045, 16, 'up', g, { cast: false, receive: true });
     for (const row of [8, 24]) for (let i = 0; i < 31; i++) { const x = cx - 42 + i * 2.8; box(0.12, 0.01, 4.8, bayLine, x, 0.06, row, g, { cast: false }); if (i < 30 && Math.random() < 0.7) cars.push([x + 1.4, row]); }
   }
   const carGeo = vehicleGeo([[4.3, 0.75, 1.78, 0, 0.72, 0, 1], [2.3, 0.62, 1.62, -0.3, 1.38, 0, 0.16]], { wheels: [[1.35, 0.82, 0.33], [1.35, -0.82, 0.33], [-1.35, 0.82, 0.33], [-1.35, -0.82, 0.33]] });
@@ -4051,14 +4373,14 @@ function buildFieldExtras(air) {
     cm.setColorAt(i, col.setHex([0xf2f2f0, 0xb8bcc2, 0x2b2f38, 0xa31f24, 0x2f4f8a, 0xd8d2c0][(Math.random() * 6) | 0])); });
   cm.userData.dynamic = true; cm.computeBoundingSphere(); air.add(cm);
   const flagMats = [navy, std(0x00a2e5, 0.8), white];
-  [-1100, -1060, -1020].forEach((x, i) => { cyl(0.09, 0.12, 11, steel, x, 5.5, -9, g, 8, o);
+  [-500, -460, -420].forEach((x, i) => { cyl(0.09, 0.12, 11, steel, x, 5.5, -9, g, 8, o);
     const f = panel(3, 2, new THREE.MeshStandardMaterial({ color: flagMats[i].color, side: THREE.DoubleSide, roughness: 0.8 }), x + 1.5, 9.8, -9, '+z', g, { cast: false, receive: false });
     f.userData.keep = true; f.onBeforeRender = () => { f.rotation.y = Math.sin(NOW / 600 + i) * 0.2; f.updateMatrixWorld(); }; });
-  const palms = []; for (let z = 4; z <= 38; z += 8.5) palms.push([-1069, z], [-1051, z]);
+  const palms = []; for (let z = 4; z <= 38; z += 8.5) palms.push([-469, z], [-451, z]);
   const pm = new THREE.InstancedMesh(TREE_CARD.geo, treeCardMaterial('palm'), palms.length);
   palms.forEach(([x, z], i) => { const h = 9 + Math.random() * 3; d.position.set(x, 0, z); d.rotation.set(0, 0, 0); d.scale.set(h / 0.94, h / 0.94, 1); d.updateMatrix(); pm.setMatrixAt(i, d.matrix); });
   pm.frustumCulled = false; pm.userData.dynamic = true; pm.userData.noCast = true; air.add(pm);
-  box(9, 0.2, 2.6, navy, -985, 2.8, -6, g, o); for (const x of [-989, -981]) box(0.12, 2.8, 0.12, steel, x, 1.4, -5, g, o); box(7, 0.5, 0.5, steel, -985, 0.5, -6.6, g, o);
+  box(9, 0.2, 2.6, navy, -385, 2.8, -6, g, o); for (const x of [-389, -381]) box(0.12, 2.8, 0.12, steel, x, 1.4, -5, g, o); box(7, 0.5, 0.5, steel, -385, 0.5, -6.6, g, o);
   // the flying club: a low clubhouse with a roof terrace over the GA apron
   const FX = -236, FZ = -36; // at the west end of the school's ramp
   box(32, 4.2, 13, white, FX, 2.1, FZ, g, o);
@@ -4273,13 +4595,14 @@ function buildDeck(air) {
 /** One runway, real rules: departures hold short until the runway and the approach are clear; taxiing traffic
  *  keeps its distance in the queue; a new arrival only starts its approach when the one ahead will have vacated and
  *  any departure already rolling will be airborne (until then it waits off-stage, out in the haze). */
+const _tq = {};
 function stepTraffic(t) {
   const r = AIRSIDE.route, ms = AIRSIDE.movers;
   if (!r?.marks || !ms.length) return;
   const { tTD, tExit, tHS, tRoll, tAir } = r.marks, T = r.T, D = tAir - tHS, sepArr = tExit - tTD + 6;
   if (AIRSIDE.trafficT == null) { // settle the traffic before anyone sees it: ten minutes of rules from the even spread
     for (const m of ms) m.u = ((m.offset % T) + T) % T;
-    AIRSIDE.trafficT = t - 600; for (let k = 0; k < 1200; k++) stepTraffic(t - 600 + (k + 1) * 0.5);
+    AIRSIDE.trafficT = t - 600; RADIO.quiet = true; for (let k = 0; k < 1200; k++) stepTraffic(t - 600 + (k + 1) * 0.5); RADIO.quiet = false;
   }
   const dt = Math.min(1, Math.max(0, t - AIRSIDE.trafficT));
   AIRSIDE.trafficT = t;
@@ -4297,6 +4620,9 @@ function stepTraffic(t) {
     }
     // line up and wait: the roll starts only once the arrival ahead has vacated the runway
     if (m.u <= tRoll && next > tRoll && (ms.some((o) => o !== m && onFinalOrRunway(o)) || trainerSoon(t, t + 25))) next = tRoll;
+    // a trainer crossing in front: hold until it's clear
+    if (m.u >= tExit && m.u <= tHS && CADET.on && CADET.plane) { sampleRoute(m.route || r, m.u + 4, _tq); const cp = CADET.plane.position;
+      if (Math.hypot(_tq.x - cp.x, _tq.z - cp.z) < 55 && cp.y < 2) next = m.u; }
     // the taxi queue: stop ten seconds behind the aircraft ahead
     if (m.u >= tExit && m.u <= tHS && ms.some((o) => o !== m && o.u > m.u && o.u - m.u < 10 && o.u <= tHS + 0.5)) next = m.u;
     // the start of the approach: spaced behind the last arrival, and not into a departure that would still be rolling
@@ -4304,6 +4630,13 @@ function stepTraffic(t) {
       const blocked = ms.some((o) => o !== m && ((o.u >= 0 && o.u < sepArr && !o.waiting) || (rolling(o) && tAir - o.u > tTD - 8))) || trainerSoon(t + tTD - 20, t + tExit + 5);
       if (blocked) { next = T - 1e-3; m.waiting = true; }
     }
+    const cs = CALLS[ms.indexOf(m) % CALLS.length], cross = (k) => m.u < k && next >= k;
+    if (cross(tTD - 70)) radio('TWR', `${cs}, wind 270 at 8, runway 28, cleared to land.`);
+    if (cross(tExit)) radio('TWR', `${cs}, vacate left via J2, taxi via K to your stand.`);
+    if (cross(tHS - 3)) radio(cs, 'holding point J6, ready for departure.');
+    if (cross(tRoll)) radio('TWR', `${cs}, runway 28, cleared for take-off.`);
+    const stn = m.route?.stand; if (stn && cross(stn.t1 - 3)) radio('GND', `${cs}, push and start approved, face east.`);
+    if (stn && cross(stn.t0 + 2)) radio(cs, 'on blocks.');
     m.u = next >= T ? next - T : next;
   }
 }
@@ -4327,7 +4660,7 @@ function updateAirside(now) {
   stepCircuits(t, Math.min(0.5, Math.max(0, t - (AIRSIDE.circT ?? t)))); AIRSIDE.circT = t;
   stepCadet(t);
   for (const m of AIRSIDE.movers) {
-    const s = sampleRoute(AIRSIDE.route, m.u, m.s);
+    const s = sampleRoute(m.route || AIRSIDE.route, m.u, m.s);
     m.g.visible = AIRSIDE.active && !m.waiting; m.shadow.visible = m.g.visible && !m.real; // a real model brings its own ground shadow
     m.g.position.set(s.x, s.y + m.lift, s.z);
     if (m.fans?.length && m.g.visible) spinFans(m.fans, t, s.y > 1 ? 20 : 12);
@@ -4335,7 +4668,11 @@ function updateAirside(now) {
     m.shadow.position.set(s.x, 0.07, s.z);
     m.shadow.material.opacity = 1;
     m.shadow.scale.setScalar(Math.max(0, 1 - s.y / 40));
+    const st = m.route?.stand;
+    if (m.tug) { const on = m.g.visible && st && m.u > st.t1 - 5 && m.u < st.tPush + 2; m.tug.visible = on;
+      if (on) { const fx = Math.cos(s.h), fz = -Math.sin(s.h); m.tug.position.set(s.x + fx * 22, 0, s.z + fz * 22); m.tug.rotation.y = s.h + Math.PI; } }
   }
+  for (const ts of AIRSIDE.turnSets ?? []) { const st = ts.R.stand; ts.set.visible = AIRSIDE.active && AIRSIDE.movers.some((m) => m.route === ts.R && !m.waiting && m.u > st.t0 + 10 && m.u < st.t1 - 8); }
   for (const v of AIRSIDE.vehicles) {
     if (v.circuit) {
       const a = v.phase * Math.PI * 2 + (t * v.speed) / ((v.rx + v.rz) / 2);
@@ -4628,7 +4965,7 @@ async function init() {
     renderer.setRenderTarget(rt);
     AIRSIDE.root.visible = AIRSIDE.active;
   }, 800);
-  requestAnimationFrame(() => { mark('raf'); document.documentElement.classList.add('is-ready'); });
+  requestAnimationFrame(() => { mark('raf'); document.documentElement.classList.add('is-ready'); if (pendingGo) { const g = pendingGo; pendingGo = null; setTimeout(() => goTo(g), 400); } });
 }
 
 /* ---------- Merge static meshes by material (hundreds of draw calls -> a few dozen) ---------- */
@@ -5134,9 +5471,16 @@ function person(shirt) {
 /** The academy's car park, across the street east of the avenue: four rows of bays either side of two aisles, a
  *  driveway from the street with a barrier and a booth, lamps, shade trees along the edges, the sign, parked cars
  *  and a few scooters. */
+/** car-park asphalt: a fine, dark, seamless surface, tiled every 4 m */
+let PARK_TEX = null;
+function parkingMat(w, d) {
+  PARK_TEX ??= (() => { const t = new THREE.TextureLoader().load('tex/parking_asphalt.webp'); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = MAX_ANISO; return t; })();
+  const t = PARK_TEX.clone(); t.needsUpdate = true; t.repeat.set(w / 4, d / 4);
+  return new THREE.MeshStandardMaterial({ map: t, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+}
 function buildAcademyParking() {
   const X0 = 32, X1 = 112, Z0 = 46, Z1 = 92, cx = (X0 + X1) / 2, cz = (Z0 + Z1) / 2, g = new THREE.Group(), o = { cast: true, receive: true };
-  const tar = M.asphalt.clone(); tar.map = repeatOf(M.asphalt.map, (X1 - X0) / 8, (Z1 - Z0) / 8); ASPHALT.push(tar);
+  const tar = parkingMat(X1 - X0, Z1 - Z0);                                   // the car park's own fine asphalt
   panel(X1 - X0, Z1 - Z0, tar, cx, 0.012, cz, 'up', scene);
   const line = new THREE.MeshStandardMaterial({ color: 0xeeeeea, roughness: 0.8 }), kerb = new THREE.MeshStandardMaterial({ color: 0xa6a195, roughness: 0.9 });
   const rows = [[50, 1], [64, -1], [69, 1], [83, -1]], bays = []; // [z of the bay row's kerb-side end, which way the bays run]
@@ -5226,8 +5570,8 @@ function updateStreet(now) {
 // laid on the scene's, so the hotels, roads and parks stand where they really are relative to it.
 const AERO = { data: null, split: 0.4, route: null, routeLen: 0, pin: null, ready: false, names: [] };
 const AERIAL_KEYS = [ // aerial phase of the scroll, t 0..1: position, look target
-  [0, [1425, 796, 1687], [145, 0, 105]],                  // the home screen opens here: the town, the expressway and the field
-  [0.3, [1050, 520, 1150], [40, 0, -60]],
+  [0, [620, 430, 1020], [-200, 0, 110]],                  // the home screen opens here: the town, the expressway and the field
+  [0.3, [420, 300, 760], [-40, 0, -40]],
   [0.6, [260, 150, 470], [0, 6, 0]],
   [0.84, [0, 24, 165], [0, 5, 0]],
   [1, [0, 1.8, 50], [0, 4.6, 0]],
@@ -5243,7 +5587,7 @@ function aerialCamera(t, pos, look) {
   look.set(0, 4.6, 0);
 }
 async function fetchAerocity() {
-  const src = FIELD === 'delhi' ? 'data/aerocity.json?v=8' : 'data/airfield.json?v=5';
+  const src = FIELD === 'delhi' ? 'data/aerocity.json?v=8' : 'data/airfield.json?v=11';
   try { AERO.data = await (await fetch(src)).json(); } catch (e) { console.warn('aerocity', e); }
 }
 /** windows drawn per storey from world position: no UVs needed on thousands of extruded walls */
@@ -5459,7 +5803,7 @@ function buildAerocity() {
   const link = (a, b, w) => { const k1 = key(...a), k2 = key(...b), L = Math.hypot(a[0] - b[0], a[1] - b[1]);
     if (!graph.has(k1)) graph.set(k1, { p: a, e: [] }); if (!graph.has(k2)) graph.set(k2, { p: b, e: [] });
     graph.get(k1).e.push([k2, L, w]); graph.get(k2).e.push([k1, L, w]); };
-  const ra = [];
+  const ra = [], ruv = [];
   D.roads.forEach((r, idx) => {
     const w = r[0], pts = [];
     for (let i = 1; i < r.length; i += 2) pts.push([r[i], r[i + 1]]);
@@ -5472,6 +5816,7 @@ function buildAerocity() {
       rp.push(pts[i][0] - tz * w / 2, y, pts[i][1] + tx * w / 2, pts[i][0] + tz * w / 2, y, pts[i][1] - tx * w / 2);
       if (i) along += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
       ra.push(-w / 2, w / 2, along, w / 2, w / 2, along);
+      ruv.push(0, along / (1.29 * w), 1, along / (1.29 * w));             // the road kit's tile, repeated down the road
       if (i) { const v = rp.length / 3 - 4; ri.push(v, v + 1, v + 2, v + 1, v + 3, v + 2); }
       if (i) link(pts[i - 1], pts[i], w);
     }
@@ -5480,9 +5825,28 @@ function buildAerocity() {
   const rg = new THREE.BufferGeometry();
   rg.setAttribute('position', new THREE.Float32BufferAttribute(rp, 3));
   rg.setAttribute('aRoad', new THREE.Float32BufferAttribute(ra, 3));
+  rg.setAttribute('uv', new THREE.Float32BufferAttribute(ruv, 2));
   rg.setIndex(ri); rg.computeVertexNormals();
-  const road = new THREE.Mesh(rg, groundMaterial('road', { roughness: 0.92, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }));
+  // the surface: the "Road Modular" kit's two-lane tile (mortalityrexotable, CC BY 4.0): asphalt, white edges, a
+  // double yellow centre line
+  const roadTex = new THREE.TextureLoader().load('tex/road_kit.webp'); roadTex.colorSpace = THREE.SRGBColorSpace; roadTex.wrapS = THREE.ClampToEdgeWrapping; roadTex.wrapT = THREE.RepeatWrapping; roadTex.anisotropy = MAX_ANISO;
+  const road = new THREE.Mesh(rg, new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.9, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }));
   road.receiveShadow = true; city.add(road);
+  // verges: rough grass and bare earth either side of every road and outside the expressway's shoulders
+  // (from the "Field" scan by Forest Run Forever, CC BY 4.0, made to tile)
+  { const vp = [], vuv = [], vi = [], T8 = 8;
+    const strip = (pts, o0, o1) => { let along = 0;
+      for (let i = 0; i < pts.length; i++) { const a = pts[Math.max(0, i - 1)], c = pts[Math.min(pts.length - 1, i + 1)]; let tx = c[0] - a[0], tz = c[1] - a[1]; const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
+        if (i) along += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+        for (const o of [o0, o1]) { vp.push(pts[i][0] - tz * o, 0.044, pts[i][1] + tx * o); vuv.push(o / T8, along / T8); }
+        if (i) { const v = vp.length / 3 - 4; vi.push(v, v + 1, v + 2, v + 1, v + 3, v + 2); } } };
+    D.roads.forEach((r) => { const w = r[0]; if (D.highway && w === D.highway.w) return; const pts = []; for (let i = 1; i < r.length; i += 2) pts.push([r[i], r[i + 1]]);
+      const VW = w >= 9 ? 4.5 : 3; strip(pts, w / 2, w / 2 + VW); strip(pts, -w / 2, -w / 2 - VW); });
+    if (D.highway) { const q = []; for (let i = 0; i < D.highway.line.length; i += 2) q.push([D.highway.line[i], D.highway.line[i + 1]]); const H2 = D.highway.off + D.highway.w / 2 + 1; strip(q, H2, H2 + 6); strip(q, -H2, -H2 - 6); }
+    const vg = new THREE.BufferGeometry(); vg.setAttribute('position', new THREE.Float32BufferAttribute(vp, 3)); vg.setAttribute('uv', new THREE.Float32BufferAttribute(vuv, 2)); vg.setIndex(vi); vg.computeVertexNormals();
+    const vt = new THREE.TextureLoader().load('tex/verge.webp'); vt.colorSpace = THREE.SRGBColorSpace; vt.wrapS = vt.wrapT = THREE.RepeatWrapping; vt.anisotropy = MAX_ANISO;
+    const verge = new THREE.Mesh(vg, new THREE.MeshStandardMaterial({ map: vt, color: 0xc4d2a6, roughness: 1, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -0.6, polygonOffsetUnits: -0.6 }));
+    verge.receiveShadow = true; city.add(verge); }
   if (D.highway) {                                                   // the expressway: its own surface, a concrete median barrier, twin-arm lamps
     const q = []; for (let i = 0; i < D.highway.line.length; i += 2) q.push([D.highway.line[i], D.highway.line[i + 1]]);
     // the surface, painted across: shoulder, three lanes (dashed), median, three lanes, shoulder; 16 px a metre
@@ -5786,6 +6150,24 @@ function vehicleGeo(parts, { wheels = null, round = 0.22 } = {}) { // parts: [w,
     g.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(s), 3)); return g; });
   return mergeGeometries(geos);
 }
+/** the real car in place of the code-built one: one instanced mesh per part, sharing the traffic's matrices (the
+ *  body takes each car's colour); the code-built mesh stays as the driver, hidden */
+function carTwins(wrap) {
+  const im = COUNTRY.carIm; if (!im || im.userData.twins) return;
+  wrap.updateMatrixWorld(true); const twins = [], m4 = new THREE.Matrix4(), c = new THREE.Color();
+  wrap.traverse((o) => {
+    if (!o.isMesh || !['body', 'dark', 'glass', 'chrome', 'lights'].includes(o.material.name)) return;
+    const src = o.geometry, geo = new THREE.BufferGeometry();                 // de-quantised, then baked into the car's frame
+    for (const [n, a] of Object.entries(src.attributes)) { if (n !== 'position' && n !== 'normal') continue; const arr = new Float32Array(a.count * 3);
+      for (let i = 0; i < a.count; i++) for (let k = 0; k < 3; k++) arr[i * 3 + k] = a.getComponent(i, k); geo.setAttribute(n, new THREE.BufferAttribute(arr, 3)); }
+    geo.setIndex(src.index); geo.applyMatrix4(o.matrixWorld);
+    const mat = o.material.clone(); if (mat.name === 'body') mat.color.setScalar(1);
+    const t2 = new THREE.InstancedMesh(geo, mat, im.count); t2.frustumCulled = false; t2.userData.dynamic = true; t2.userData.noCast = true;
+    for (let i = 0; i < im.count; i++) { im.getMatrixAt(i, m4); t2.setMatrixAt(i, m4); if (mat.name === 'body' && im.instanceColor) { im.getColorAt(i, c); t2.setColorAt(i, c); } }
+    im.parent.add(t2); twins.push(t2);
+  });
+  if (twins.length) { im.userData.twins = twins; im.visible = false; }
+}
 function buildCountryLife(city, D) {
   const rnd = mulberry32(77), d = new THREE.Object3D(), col = new THREE.Color();
   const std = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.25 });
@@ -5820,6 +6202,7 @@ function buildCountryLife(city, D) {
         lo: lane.oneway ? [-3.4, 0, 3.4][(rnd() * 3) | 0] : null });      // on the expressway: one of three lanes
     }
     city.add(im);
+    if (kind === 'car') { COUNTRY.carIm = im; airModels.car?.then((w) => w && carTwins(w)); }
   }
   // birds: a V of two wings, flapped by flipping the instance's vertical scale
   const bird = new THREE.BufferGeometry();
@@ -6091,6 +6474,7 @@ function updateCountryLife(now, dt) {
     _cq.position.set(x0 + (x1 - x0) * u + dz * off, 0.06, z0 + (z1 - z0) * u - dx * off);
     _cq.rotation.set(0, Math.atan2(-dz, dx), 0); _cq.scale.setScalar(1); _cq.updateMatrix();
     v.im.setMatrixAt(v.i, _cq.matrix); touched.add(v.im);
+    const tw = v.im.userData.twins; if (tw) for (const t2 of tw) { t2.setMatrixAt(v.i, _cq.matrix); touched.add(t2); }
   }
   for (const b of COUNTRY.flocks) {
     const a = b.ph + t * b.w, wob = Math.sin(t * 0.7 + b.ph * 3) * 0.18;
@@ -6336,7 +6720,48 @@ function setupScroll() {
 const caps = [...document.querySelectorAll('.cap')].map((el) => ({
   el, a: +el.dataset.in, b: +el.dataset.hold, c: +el.dataset.out,
 }));
-const progressFill = document.getElementById('progressFill');
+const progressFill = document.getElementById('progressFill'), TICKS = [...document.querySelectorAll('.progress i')];
+
+/* ---------- Chapters: the menu in the header, the opening's buttons; Back in every room ---------- */
+const CHAPTER_P = { campus: 0.44, lobby: 0.735 };
+let pendingGo = null, chapterOn;
+/** go to a chapter: glide the walk to it (Lenis, eased), or to the doors and on through one; from inside a room,
+ *  leave it first and carry on once back in the lobby */
+function goTo(target) {
+  closeChapters();
+  if (!html.classList.contains('is-ready')) { pendingGo = target; return; }   // still loading: once it's up
+  if (DIVE.room || mode === 'room' || mode === 'screen') {
+    if (mode === 'room' && activeRoom === target && !DIVE.room) return;
+    if (DIVE.room && DIVE.room === target) return;
+    leaveThen(target); return;
+  }
+  if (mode !== 'walk') return;                                              // mid-flight: let it land first
+  const room = /^[ABC]$/.test(target), to = room ? 1 : CHAPTER_P[target]; if (to == null) return;
+  const enter = () => { if (!room) return; const wait = () => (Math.abs(targetP - p) < 0.003 ? enterRoom(target) : requestAnimationFrame(wait)); wait(); };
+  if (Math.abs(to - p) < 0.004) return enter();
+  const max = ScrollTrigger.maxScroll(window), dur = Math.min(5.5, 1.4 + Math.abs(to - p) * 5);
+  if (lenis && !reduceMotion) lenis.scrollTo(to * max, { duration: dur, easing: EASE_TRAVEL, lock: true, force: true, onComplete: enter });
+  else { window.scrollTo(0, to * max); targetP = p = to; enter(); }
+}
+function leaveThen(target) {
+  pendingGo = target;
+  if (DIVE.room) closePage(); else if (engineOpen) closeEngine(); else leaveRoom();
+  const wait = () => { if (mode === 'walk' && !DIVE.room && !roomTl) { const g = pendingGo; pendingGo = null; if (g) setTimeout(() => goTo(g), 80); } else requestAnimationFrame(wait); };
+  requestAnimationFrame(wait);
+}
+function goBack() { if (DIVE.room) closePage(); else if (engineOpen) closeEngine(); else leaveRoom(); }
+document.addEventListener('click', (e) => { const g = e.target.closest('[data-go]'); if (g) { e.preventDefault(); goTo(g.dataset.go); } });
+document.getElementById('topBack').addEventListener('click', goBack);
+const chaptersToggle = document.getElementById('chaptersToggle'), chaptersNav = document.getElementById('chapters');
+function closeChapters() { chaptersNav.classList.remove('is-open'); chaptersToggle.setAttribute('aria-expanded', 'false'); }
+chaptersToggle.addEventListener('click', () => { const on = !chaptersNav.classList.contains('is-open'); chaptersNav.classList.toggle('is-open', on); chaptersToggle.setAttribute('aria-expanded', String(on)); });
+document.addEventListener('pointerdown', (e) => { if (!chaptersNav.contains(e.target)) closeChapters(); });
+/** which chapter the camera is in, lit in the menu */
+function markChapter() {
+  const c = activeRoom && mode !== 'walk' ? activeRoom : p < 0.4 ? null : p < 0.66 ? 'campus' : p < 0.92 ? 'lobby' : null;
+  if (c === chapterOn) return; chapterOn = c;
+  chaptersNav.querySelectorAll('[data-go]').forEach((bt) => { if (bt.dataset.go === c) bt.setAttribute('aria-current', 'true'); else bt.removeAttribute('aria-current'); });
+}
 
 /* ---------- Pointer parallax (tiny) ---------- */
 const pointer = { x: 0, y: 0, sx: 0, sy: 0 };
@@ -6386,9 +6811,8 @@ const COURSES = {
     views: [
       { label: 'Down the runway', pos: [720, 75, -175], look: [-260, 0, -250] },
       { label: 'Final approach', pos: [1290, 46, -262], look: [560, 10, -322] },
-      { label: 'Hangar row', pos: [-330, 26, -200], look: [-610, 9, -55] },
-      ...(FIELD !== 'delhi' ? [{ label: 'Control tower', pos: [-812, 33.6, -44], look: [-620, 0, -470] }, { label: 'Flying club', pos: [-232, 6.6, -45], look: [-80, 1, -84] },
-        { label: 'Ride a trainer', follow: 'trainer' }, { label: 'Ride the train', follow: 'train' }, { label: "Cadet's first flight", follow: 'cadet' }] : []),
+      { label: 'Terminal', pos: [-318, 34, -44], look: [-520, 0, -82] },          // from the terminal's east end, down the line of airliners
+      ...(FIELD !== 'delhi' ? [{ label: 'Flying school', pos: [16, 11.6, -36], look: [-62, 0, -50] }, { label: "Cadet's first flight", follow: 'cadet' }] : []),
     ],
     doorLook: [0, 1.6, -40], split: 0.5, dur: 16,
   },
@@ -6549,7 +6973,7 @@ function goToView(c, i) {
 /* ---------- A cadet's first flight: one trainer from briefing to debrief, captioned stage by stage ----------
    The route is sampled like the circuits (0.25 s, heading h, pitch p, bank r): the walk-round on the GA apron, taxi
    along K to J1, the run-up at the hold, line up on 28 and take off westbound with the rest of the traffic, a right-hand circuit north of the field
-   at 200 m, a full-stop landing, vacate at J4 and taxi back to the line. Long legs play faster. While it runs the
+   at 200 m, a full-stop landing, vacate at J3 and taxi straight back across K to the line. Long legs play faster. While it runs the
    lesson holds the runway: the airliners hold short and wait to start their approaches, the circuit trainers go
    around. */
 const CADET = { on: false, t: 0, plane: null, taxi: null, route: null, stage: -1, ui: null };
@@ -6565,7 +6989,7 @@ const CADET_STAGES = {
   base: ['Base', 'Power back, first stage of flap, start the descent.'],
   final: ['Final approach', 'Line up with the centreline and aim for the numbers at 65 knots.'],
   landing: ['Touchdown', 'Flare, hold off, let the main wheels settle, then brakes.'],
-  taxiIn: ['Vacate and taxi in', 'Off the runway at J4, along K, after-landing checks, taxi back to the school’s ramp.'],
+  taxiIn: ['Vacate and taxi in', 'Off the runway at J3 and straight across K, after-landing checks, taxi back to the school’s ramp.'],
   debrief: ['Debrief', 'That was your first circuit. Every pilot’s journey starts right here.'],
 };
 function buildCadetRoute() {
@@ -6575,20 +6999,23 @@ function buildCadetRoute() {
   const fwd = () => { x += Math.cos(h) * v * dt; z -= Math.sin(h) * v * dt; };
   const stage = (k, rate = 1) => marks.push({ k, t, rate });
   const wait = (s) => { for (let i = 0; i < s / dt; i++) rec(); };
-  const turn = (dh, R, climb = 0, bank = 0) => { const n = Math.max(2, Math.ceil(Math.abs(dh) * R / Math.max(v, 1) / dt));
-    for (let i = 0; i < n; i++) { r = -Math.sign(dh) * bank * Math.min(1, i / 6, (n - i) / 6); rec(); h += dh / n; fwd(); y += climb * dt; } r = 0; h = wrap(h); };
+  const turn = (dh, R, climb = 0, bank = 0) => {
+    const v0 = v, ground = y < 0.5; if (ground) { R = Math.max(R, 12); v = Math.min(v, 3.2); }    // on the ground: slow right down and swing round gently
+    const n = Math.max(2, Math.ceil(Math.abs(dh) * R / Math.max(v, 1) / dt));
+    for (let i = 0; i < n; i++) { r = -Math.sign(dh) * bank * Math.min(1, i / 6, (n - i) / 6); rec(); const e = (Math.sin(Math.PI * (i + 0.5) / n)) * Math.PI / 2; h += dh / n * e; fwd(); y += climb * dt; }
+    v = v0; r = 0; h = wrap(h); };
   stage('brief'); wait(9);
   stage('walk'); wait(11);
   stage('taxi', 2); v = 8;
-  while (z > RAMP.lane + 6) { rec(); fwd(); }
-  turn(Math.PI / 2, 6);                                    // left onto the ramp's lane, westbound
-  while (x > RAMP.links[0] + 6) { rec(); fwd(); }
-  turn(-Math.PI / 2, 6);                                   // right into the link, north: across K and up J3
+  while (z > RAMP.lane + 12) { rec(); fwd(); }
+  turn(Math.PI / 2, 12);                                   // left onto the ramp's lane, westbound
+  while (x > RAMP.links[0] + 12) { rec(); fwd(); }
+  turn(-Math.PI / 2, 12);                                  // right into the link, north: across K and up J3
   x = RAMP.links[0];
-  while (z > -228) { rec(); fwd(); }
+  while (z > -205) { rec(); fwd(); }                                      // the run-up: well behind the hold-short line (~-227)
   stage('hold'); v = 0; wait(8);
-  v = 5; while (z > -312) { rec(); fwd(); }
-  turn(Math.PI / 2, 10);                                   // left onto runway 28 at J3: an intersection departure, westbound like everyone else
+  v = 5; while (z > -310) { rec(); fwd(); }
+  turn(Math.PI / 2, 12);                                   // left onto runway 28 at J3: an intersection departure, westbound like everyone else
   z = RWY_Z; h = Math.PI; v = 0; wait(2);
   stage('takeoff');
   while (v < 31) { rec(); fwd(); v += 2.6 * dt; }
@@ -6610,21 +7037,14 @@ function buildCadetRoute() {
   y = 0; stage('landing');
   while (v > 9) { p = Math.max(0, p - 0.03 * dt); rec(); fwd(); v -= 2.6 * dt; }
   stage('taxiIn', 2.5); p = 0; v = 9;
-  const J4 = 300;
-  while (x > J4 + 15) { rec(); fwd(); }
-  turn(Math.PI / 2, 15);                                   // left off at J4, south
-  x = J4;
-  while (z < TWY_Z - 12) { rec(); fwd(); }
-  turn(-Math.PI / 2, 12);                                  // right onto K, westbound
-  z = TWY_Z;
-  while (x > RAMP.links[1] + 6) { rec(); fwd(); }
-  turn(Math.PI / 2, 6);                                    // left into the ramp's east link, south
-  x = RAMP.links[1];
-  while (z < RAMP.lane - 6) { rec(); fwd(); }
-  turn(-Math.PI / 2, 6);                                   // right onto the lane, westbound
+  while (x > RAMP.links[0] + 15) { rec(); fwd(); }                         // roll on to the next exit, J3
+  turn(Math.PI / 2, 15);                                                   // left off at J3, south
+  x = RAMP.links[0];
+  while (z < RAMP.lane - 12) { rec(); fwd(); }                              // straight across K and down the school's link
+  turn(Math.PI / 2, 12);                                                   // left onto the lane, eastbound
   z = RAMP.lane;
-  while (x > RAMP.cadetX + 6) { rec(); fwd(); }
-  turn(Math.PI / 2, 6);                                    // left onto the spot, south
+  while (x < RAMP.cadetX - 12) { rec(); fwd(); }
+  turn(-Math.PI / 2, 12);                                                  // right onto the spot, south
   x = RAMP.cadetX;
   while (z < RAMP.z) { rec(); fwd(); }
   v = 0; stage('debrief'); wait(9);
@@ -6633,8 +7053,8 @@ function buildCadetRoute() {
 function cadetUi() {
   if (CADET.ui) return CADET.ui;
   const el = document.createElement('div');
-  el.style.cssText = 'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:35;width:min(560px,calc(100vw - 32px));padding:16px 18px;border-radius:14px;background:rgba(10,18,44,.9);color:#fff;font:400 14px/1.45 Manrope,system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.35);display:none';
-  el.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px"><strong data-c="title" style="font-size:17px"></strong><span data-c="step" style="opacity:.6;font-size:12px;white-space:nowrap"></span></div><p data-c="text" style="margin:6px 0 12px"></p><div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" data-c="skip" class="btn btn--ghost" style="padding:6px 14px">Next stage ›</button><button type="button" data-c="end" class="btn btn--ghost" style="padding:6px 14px">End flight</button></div>';
+  el.className = 'lesson'; el.setAttribute('role', 'status'); el.setAttribute('aria-live', 'polite');
+  el.innerHTML = '<p class="lesson__eyebrow">Cadet’s first flight · <span data-c="step"></span></p><h3 data-c="title"></h3><p data-c="text"></p><div class="lesson__bar" aria-hidden="true"><span data-c="bar"></span></div><div class="lesson__actions"><button type="button" data-c="skip" class="btn btn--ghost btn--sm">Next stage ›</button><button type="button" data-c="end" class="btn btn--ghost btn--sm">End flight</button></div>';
   document.body.appendChild(el);
   el.querySelector('[data-c=skip]').addEventListener('click', () => { const m = CADET.route.marks, i = m.findIndex((q) => q.t > CADET.t); if (i >= 0) CADET.t = m[i].t; else endCadet(true); });
   el.querySelector('[data-c=end]').addEventListener('click', () => endCadet(true));
@@ -6651,7 +7071,7 @@ function endCadet(back) {
   CADET.on = false; CADET.plane.visible = false; if (CADET.taxi) CADET.taxi.visible = true;
   if (CADET.ui) CADET.ui.style.display = 'none';
   AIRSIDE.trainerWins = AIRSIDE.trainerWins.filter((w) => !w.cadet);
-  if (back && FOLLOW.kind === 'cadet') { FOLLOW.kind = null; const c = COURSES.C, i = c.views.findIndex((v) => v.label === 'Flying club'); if (i >= 0) { VIEW.at = -1; goToView(c, i); } setCardCollapsed(false); }
+  if (back && FOLLOW.kind === 'cadet') { FOLLOW.kind = null; const c = COURSES.C, i = c.views.findIndex((v) => v.label === 'Flying school'); if (i >= 0) { VIEW.at = -1; goToView(c, i); } setCardCollapsed(false); }
 }
 function stepCadet(t) {
   if (!CADET.on) return;
@@ -6660,7 +7080,12 @@ function stepCadet(t) {
   CADET.t += dtr * R.marks[i].rate;
   if (CADET.t >= R.T - R.dt) { endCadet(true); return; }
   if (i !== CADET.stage) { CADET.stage = i; const [ti, tx] = CADET_STAGES[R.marks[i].k], ui = cadetUi();
-    ui.querySelector('[data-c=title]').textContent = ti; ui.querySelector('[data-c=text]').textContent = tx; ui.querySelector('[data-c=step]').textContent = `${i + 1} of ${R.marks.length}`; }
+    const rc = { taxi: ['TWR', 'Cadet 1, taxi to holding point J3, cross K.'], hold: ['Cadet 1', 'holding point J3, ready for departure.'], takeoff: ['TWR', 'Cadet 1, runway 28, cleared for take-off, wind 270 at 6.'],
+      crosswind: ['Cadet 1', 'crosswind, climbing to circuit height.'], downwind: ['Cadet 1', 'downwind, full stop.'], base: ['TWR', 'Cadet 1, number one, report final.'],
+      final: ['TWR', 'Cadet 1, runway 28, cleared to land.'], taxiIn: ['TWR', 'Cadet 1, vacate at J3, cross K, taxi to the school ramp.'] }[R.marks[i].k];
+    if (rc) radio(...rc);
+    ui.querySelector('[data-c=title]').textContent = ti; ui.querySelector('[data-c=text]').textContent = tx; ui.querySelector('[data-c=step]').textContent = `${i + 1} of ${R.marks.length}`;
+    ui.querySelector('[data-c=bar]').style.width = `${((i + 1) / R.marks.length) * 100}%`; }
   // hold the runway from the run-up to the landing roll, rolling forward: the airliners and circuits see it coming
   const k = (key) => R.marks.find((m) => m.k === key)?.t ?? 0;
   if (CADET.t < k('taxiIn')) { AIRSIDE.trainerWins = AIRSIDE.trainerWins.filter((w) => !w.cadet); const w = [t - 1, t + 300]; w.cadet = true; AIRSIDE.trainerWins.push(w); }
@@ -6683,7 +7108,7 @@ function cadetCamera(dt) {
   if (!CADET.on) return;
   const g = CADET.plane, key = CADET.route.marks[Math.max(0, CADET.stage)]?.k, fixed = ['brief', 'debrief', 'walk', 'hold', 'landing'].includes(key), base = fixed ? 0.45 : 0.15; // a chase keeps up
   g.getWorldPosition(_fp); _ff.set(Math.cos(CADET.s?.h ?? 0), 0, -Math.sin(CADET.s?.h ?? 0));
-  if (key === 'brief' || key === 'debrief') { _fl.set(RAMP.cadetX + 14, 4.5, RAMP.z + 14); _cq2.copy(_fp).setY(1.5); }
+  if (key === 'brief' || key === 'debrief') { _fl.set(RAMP.cadetX + 11, 4.5, RAMP.z + 8); _cq2.copy(_fp).setY(1.5); }
   else if (key === 'walk') { const a = performance.now() / 4000; _fl.set(_fp.x + Math.cos(a) * 9, 2.3, _fp.z + Math.sin(a) * 9); _cq2.copy(_fp).setY(1.2); }
   else if (key === 'hold') { _fl.copy(_fp).add(new THREE.Vector3(_ff.z, 0, -_ff.x).multiplyScalar(-11)).addScaledVector(_ff, 6); _fl.y = 2.4; _cq2.copy(_fp).setY(1.2); }
   else if (key === 'landing') { _fl.set(RWY_THR - 380, 5, RWY_Z + 34); _cq2.copy(_fp).setY(_fp.y + 1); }
@@ -7004,14 +7429,14 @@ function screenAt(x, y) {
 }
 /** Hover labels airside: what you are looking at, and what the school teaches about it */
 const TIP = Object.assign(document.createElement('div'), { className: 'scene-tip' });
-TIP.style.cssText = 'position:fixed;z-index:30;pointer-events:none;padding:8px 12px;border-radius:10px;background:rgba(10,18,44,.88);color:#fff;font:500 13px/1.35 Manrope,system-ui,sans-serif;max-width:260px;box-shadow:0 6px 24px rgba(0,0,0,.3);opacity:0;transition:opacity .15s';
+TIP.setAttribute('role', 'tooltip');
 document.body.appendChild(TIP);
 function hideTip() { TIP.style.opacity = '0'; }
 const PLACES = () => [
   [-805, 31, -34, 'Control tower', 'Air traffic control clears every take-off and landing: you will learn the radio calls in ground school.'],
   [-236, 5, -36, 'Flying club', 'Where cadets brief, debrief and wait for the weather.'],
   [-60, 3, -58, 'The school’s ramp', 'The trainers, chocked and tied down: every flight starts with a walk-round here.'],
-  [-1060, 9, -30, 'Terminal', 'Regional airline flights: the career most cadets train for.'],
+  [-460, 9, -30, 'Terminal', 'Regional airline flights: the career most cadets train for.'],
   [-1390, 7, -30, 'Fire station', 'Airport rescue and fire-fighting cover, on call whenever aircraft fly.'],
   [-1640, 9, -40, 'Fuel farm', 'Avgas for the trainers, Jet A-1 for the airliners.'],
   [-300, 6, -470, 'Weather station', 'Wind, visibility, temperature and pressure: the METAR every pilot reads before flight.'],
@@ -7025,7 +7450,7 @@ function updateTip(x, y) {
   let best = null, bd = 46;
   for (const p of PLACES()) { _tp.set(p[0], p[1], p[2]).project(camera); if (_tp.z > 1) continue; const sx = (_tp.x + 1) / 2 * innerWidth, sy = (1 - _tp.y) / 2 * innerHeight, d = Math.hypot(sx - x, sy - y); if (d < bd) { bd = d; best = p; } }
   if (!best) return hideTip();
-  TIP.innerHTML = `<strong style="display:block;margin-bottom:2px">${best[3]}</strong>${best[4]}`;
+  TIP.innerHTML = `<strong>${best[3]}</strong>${best[4]}`;
   TIP.style.left = Math.min(innerWidth - 280, x + 16) + 'px'; TIP.style.top = (y + 16) + 'px'; TIP.style.opacity = '1';
 }
 canvas.addEventListener('pointermove', (e) => {
@@ -7100,6 +7525,8 @@ function frame() {
   const near = FOLLOW.kind ? 1 : camera.position.y > 12 ? Math.max(0.5, camera.position.y * 0.15) : camera.position.z < -25.5 ? 0.3 : 0.05; // depth precision from the air: no z-fighting
   if (Math.abs(camera.near - near) > 0.01) { camera.near = near; camera.updateProjectionMatrix(); }
   if (AIRSIDE.root) updateAirside(now);
+  if (AIRSIDE.active) for (const g of [...AIRSIDE.circuits.map((c) => c.g), ...(AIRSIDE.taxiTrainers ?? [])]) if (g.visible && g.userData.fans?.length) spinFans(g.userData.fans, now / 1000, 48); // propellers turning
+  if (AIRSIDE.active && RAMPCREW.length) for (const mx of RAMPCREW) mx.update(Math.min(dt, 100) / 1000);
   // the traffic screen only redraws while the camera is inside the lobby
   updateTraffic(now, (camera.position.z < 1.5 && camera.position.z > -14) || TRAFFIC.force);
   for (const d of Object.values(DOORS)) {
@@ -7146,7 +7573,9 @@ function frame() {
       c.el.style.pointerEvents = o > 0.6 ? 'auto' : 'none';
     }
     progressFill.style.transform = `scaleY(${clamp01(p).toFixed(4)})`;
+    for (const t of TICKS) t.classList.toggle('is-on', p >= +t.dataset.at - 0.005);
   }
+  markChapter();
 
   updateGrass(now);
   updateStreet(now);
