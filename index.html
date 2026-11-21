@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..600;1,9..144,400..600&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=15" />
+  <link rel="stylesheet" href="style.css?v=24" />
   <script type="importmap">
     { "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
@@ -71,14 +71,15 @@
     <p class="eyebrow" data-f="eyebrow"></p>
     <h2 data-f="title"></h2>
     <p class="room-card__lede" data-f="lede"></p>
-    <ul class="room-card__list" data-f="points"></ul>
+    <details class="rc-more"><summary>What you’ll find here</summary><ul class="room-card__list" data-f="points"></ul></details>
+    <div class="room-card__extra" data-f="extra" hidden></div>
     <div class="room-card__views" id="roomViews" hidden>
-      <p class="room-card__views-label">Viewpoints</p>
-      <div class="room-card__views-row" data-f="views"></div>
-      <p class="room-card__views-label">Time of day</p>
-      <div class="room-card__views-row" id="todRow"><button type="button" data-tod="day" aria-pressed="true">Day</button><button type="button" data-tod="dusk" aria-pressed="false">Dusk</button></div>
-      <p class="room-card__views-label">Sound</p>
-      <div class="room-card__views-row"><button type="button" id="soundBtn" aria-pressed="false">Sound off</button></div>
+      <section class="rc-group"><p class="rc-label">Viewpoints</p><div class="rc-grid" data-f="views"></div></section>
+      <section class="rc-group" data-f="rides-wrap"><p class="rc-label">Ride along</p><div class="rc-grid rc-grid--ride" data-f="rides"></div></section>
+      <div class="rc-settings">
+        <div class="rc-setting"><span class="rc-label">Light</span><div class="rc-seg" id="todRow" role="group" aria-label="Time of day"><button type="button" data-tod="day" aria-pressed="true">Day</button><button type="button" data-tod="dusk" aria-pressed="false">Dusk</button></div></div>
+        <div class="rc-setting"><span class="rc-label">Sound</span><button type="button" id="soundBtn" class="rc-switch" aria-pressed="false" aria-label="Sound"><i aria-hidden="true"></i><span>Off</span></button></div>
+      </div>
     </div>
     <div class="room-card__actions">
       <button class="btn" type="button" id="engineOpen" hidden>Open engine simulator</button>
@@ -108,6 +109,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/ScrollTrigger.min.js"></script>
   <script src="https://unpkg.com/lenis@1.1.13/dist/lenis.min.js"></script>
-  <script type="module" src="main.js?v=172"></script>
+  <script type="module" src="main.js?v=191"></script>
 </body>
 </html>

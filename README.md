@@ -2,8 +2,8 @@
 
 A scroll-driven 3D walk through the AviationSpot360 ground school: the campus, the reception lobby, a live-radar
 screen in the lounge, rooms A (Cadet Prep) and B (1-on-1 Mentorship), and Door C out to a fictional training
-airfield in farmland: trainers flying circuits, airliners at a small terminal, hangars at work, a town, a canal and
-a railway, day or dusk, with ride-along views of a trainer and the train.
+airfield in farmland: trainers flying circuits, airliners at a small terminal, hangars at work, a town astride an
+expressway, a canal and a railway, day or dusk, with ride-along views of a trainer and the train.
 
 Live: https://nikunj69420.github.io/aviationnew/ · Main site: https://nikunj69420.github.io/aviationspot/
 

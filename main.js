@@ -96,6 +96,26 @@ function panel(w, h, mat, x, y, z, facing = '+z', parent = scene, opts = { cast:
   return m;
 }
 
+/** A live screen: a static base drawn once, an animated layer drawn over it a dozen times a second while its room is
+ *  in view (SCREENS, tickScreens). Returns the texture. */
+const SCREENS = [];
+function screenTex(base, overlay, room) {
+  const src = base.image, c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
+  const g = c.getContext('2d'); g.drawImage(src, 0, 0);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = MAX_ANISO;
+  SCREENS.push({ g, src, t, overlay, room, at: 0 });
+  return t;
+}
+function tickScreens(now) {
+  for (const s of SCREENS) {
+    if (!(activeRoom === s.room || DIVE.room === s.room)) continue;
+    const tex = now >= s.at && !DIVE.open, live = DIVE.room === s.room && DIVE.live && DIVE.el?.style.visibility === 'visible' && now >= (s.lat || 0); // the texture rests while the page is up
+    if (!tex && !live) continue;
+    s.g.drawImage(s.src, 0, 0); s.overlay(s.g, s.src.width, s.src.height, now / 1000);
+    if (tex) { s.at = now + 80; s.t.needsUpdate = true; }
+    if (live) { s.lat = now + 33; drawLive(s); }                  // the page's copy of the screen runs at 30 fps
+  }
+}
 function canvasTex(w, h, draw, { repeat = null, srgb = true } = {}) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
@@ -1412,42 +1432,43 @@ function roomTextures() {
       g.fillStyle = 'rgba(40,24,12,0.5)'; g.fillRect(0, r * ph, w, 2);
     }
   });
-  // Lesson slide on the classroom display
+  // The classroom display: the two routes to an airline's right seat (DGCA licence route; airline cadet programme)
   R.slideA = canvasTex(1600, 800, (g, w, h) => {
-    const bg = g.createLinearGradient(0, 0, w, h);
-    bg.addColorStop(0, '#0f1b48'); bg.addColorStop(1, '#0a1336');
+    const bg = g.createLinearGradient(0, 0, w, h); bg.addColorStop(0, '#0f1b48'); bg.addColorStop(1, '#0a1336');
     g.fillStyle = bg; g.fillRect(0, 0, w, h);
-    g.fillStyle = '#4cc3f2'; g.font = FONT(600, 26, "'JetBrains Mono', monospace"); g.letterSpacing = '6px';
-    g.fillText('ROOM A · CADET PREP', 90, 110);
-    g.letterSpacing = '0px';
-    g.fillStyle = '#f2f4f8'; g.font = FONT(500, 92, DISPLAY);
-    g.fillText('Selection readiness', 90, 230);
-    const cols = [['Aptitude', 'Reasoning, numerical', 'and verbal drills'], ['Interview', 'Mock panels with', 'structured feedback'], ['Group discussion', 'Practice rounds and', 'personal preparation']];
-    cols.forEach(([t, a, b], i) => {
-      const x = 90 + i * 480, y = 380;
-      g.strokeStyle = 'rgba(242,244,248,0.18)'; g.lineWidth = 2; g.strokeRect(x, y, 430, 300);
-      g.fillStyle = '#00a2e5'; g.fillRect(x, y, 430, 6);
-      g.fillStyle = '#f2f4f8'; g.font = FONT(600, 44); g.fillText(t, x + 34, y + 96);
-      g.fillStyle = 'rgba(242,244,248,0.72)'; g.font = FONT(500, 30);
-      g.fillText(a, x + 34, y + 170); g.fillText(b, x + 34, y + 214);
-      g.fillStyle = 'rgba(242,244,248,0.5)'; g.font = FONT(600, 26, "'JetBrains Mono', monospace");
-      g.fillText(`0${i + 1}`, x + 34, y + 266);
-    });
+    g.fillStyle = '#4cc3f2'; g.font = FONT(600, 24, "'JetBrains Mono', monospace"); g.letterSpacing = '6px';
+    g.fillText('ROOM A · CADET PREP', 80, 86); g.letterSpacing = '0px';
+    g.fillStyle = '#f2f4f8'; g.font = FONT(500, 72, DISPLAY); g.fillText('Your path to the right seat', 80, 172);
+    const steps = [['Class 12', 'Physics & Maths'], ['Medical', 'DGCA Class 2, then 1'], ['Ground exams', 'DGCA papers + RTR'], ['Flight training', '200 hours at an FTO'],
+      ['CPL', 'Commercial licence'], ['Type rating', 'A320, B737 and others'], ['First Officer', 'The right seat']];
+    const x0 = 120, x1 = w - 120, y = 360, dx = (x1 - x0) / (steps.length - 1);
+    g.strokeStyle = 'rgba(242,244,248,0.35)'; g.lineWidth = 4; g.beginPath(); g.moveTo(x0, y); g.lineTo(x1, y); g.stroke();
+    steps.forEach(([t, s], i) => { const x = x0 + i * dx;
+      g.fillStyle = i === steps.length - 1 ? '#00a2e5' : '#f2f4f8'; g.beginPath(); g.arc(x, y, 16, 0, 7); g.fill();
+      g.textAlign = 'center'; g.fillStyle = '#f2f4f8'; g.font = FONT(700, 31); g.fillText(t, x, y + 70);
+      g.fillStyle = 'rgba(242,244,248,0.66)'; g.font = FONT(500, 22); g.fillText(s, x, y + 106);
+      g.fillStyle = 'rgba(76,195,242,0.8)'; g.font = FONT(600, 20, "'JetBrains Mono', monospace"); g.fillText(String(i + 1).padStart(2, '0'), x, y - 34); g.textAlign = 'left'; });
+    // the cadet route, branching under the line
+    g.strokeStyle = '#00a2e5'; g.lineWidth = 3; g.setLineDash([12, 10]);
+    g.beginPath(); g.moveTo(x0, y + 140); g.quadraticCurveTo(x0, y + 230, x0 + 140, y + 230); g.lineTo(x1 - 140, y + 230); g.quadraticCurveTo(x1, y + 230, x1, y + 140); g.stroke(); g.setLineDash([]);
+    g.fillStyle = '#f2f4f8'; g.font = FONT(700, 32); g.textAlign = 'center';
+    g.fillText('Or an airline cadet programme: selection first, then training on the airline’s pathway', w / 2, y + 290);
+    g.fillStyle = 'rgba(242,244,248,0.6)'; g.font = FONT(500, 24); g.fillText('Requirements and stages vary by programme: always check the airline’s and DGCA’s current rules', w / 2, y + 336); g.textAlign = 'left';
   });
-  // Selection-stage timeline board for the classroom side wall
+  // The side board: a cadet programme's selection, stage by stage, and what we practise for each
   R.stages = canvasTex(1400, 560, (g, w, h) => {
     g.fillStyle = '#f5f4f0'; g.fillRect(0, 0, w, h);
-    g.fillStyle = '#111c44'; g.font = FONT(500, 64, DISPLAY); g.fillText('The road to the right seat', 70, 120);
-    const steps = ['Apply', 'Aptitude test', 'Interview', 'Medical', 'Training'];
-    g.strokeStyle = '#111c44'; g.lineWidth = 4; g.beginPath(); g.moveTo(110, 300); g.lineTo(w - 110, 300); g.stroke();
-    steps.forEach((t, i) => {
-      const x = 110 + i * ((w - 220) / (steps.length - 1));
-      g.fillStyle = i === 1 || i === 2 ? '#00a2e5' : '#111c44';
-      g.beginPath(); g.arc(x, 300, 22, 0, 7); g.fill();
-      g.fillStyle = '#111c44'; g.font = FONT(600, 36); g.textAlign = 'center'; g.fillText(t, x, 390);
-      g.fillStyle = '#6a7088'; g.font = FONT(500, 26, "'JetBrains Mono', monospace"); g.fillText(`STAGE ${i + 1}`, x, 250);
-      g.textAlign = 'left';
-    });
+    g.fillStyle = '#111c44'; g.font = FONT(500, 54, DISPLAY); g.fillText('Cadet selection, stage by stage', 60, 96);
+    const steps = [['Apply', 'Eligibility, documents'], ['Aptitude', 'Maths, physics, reasoning'], ['Assessment', 'Psychometric, pilot aptitude'], ['Group & interview', 'GD and panel interview'], ['Medical', 'DGCA Class 1'], ['Training', 'The airline’s pathway']];
+    const x0 = 110, x1 = w - 110, y = 260, dx = (x1 - x0) / (steps.length - 1);
+    g.strokeStyle = '#111c44'; g.lineWidth = 4; g.beginPath(); g.moveTo(x0, y); g.lineTo(x1, y); g.stroke();
+    steps.forEach(([t, s], i) => { const x = x0 + i * dx, prep = i >= 1 && i <= 3;
+      g.fillStyle = prep ? '#00a2e5' : '#111c44'; g.beginPath(); g.arc(x, y, 20, 0, 7); g.fill();
+      g.textAlign = 'center'; g.fillStyle = '#111c44'; g.font = FONT(700, 30); g.fillText(t, x, y + 70);
+      g.fillStyle = '#5a6078'; g.font = FONT(500, 22); g.fillText(s, x, y + 106);
+      g.fillStyle = '#6a7088'; g.font = FONT(600, 20, "'JetBrains Mono', monospace"); g.fillText(`STAGE ${i + 1}`, x, y - 40); g.textAlign = 'left'; });
+    g.fillStyle = '#00a2e5'; g.beginPath(); g.arc(80, 470, 12, 0, 7); g.fill();
+    g.fillStyle = '#111c44'; g.font = FONT(600, 26); g.fillText('Practised in Room A: aptitude drills, mock group discussions, interview panels, programme updates', 104, 479);
   });
   // An aeronautical-chart style print
   R.chart = canvasTex(1000, 700, (g, w, h) => {
@@ -1463,6 +1484,38 @@ function roomTextures() {
     g.strokeStyle = '#0a6fa0'; g.lineWidth = 3; g.setLineDash([16, 10]);
     g.beginPath(); g.moveTo(120, 600); g.lineTo(300, 280); g.lineTo(720, 470); g.lineTo(900, 120); g.stroke(); g.setLineDash([]);
     g.fillStyle = '#c0392b'; g.beginPath(); g.arc(120, 600, 9, 0, 7); g.arc(900, 120, 9, 0, 7); g.fill();
+  });
+  // Room B: the mentor's profile (the photo is its own panel, see buildRooms), how mentorship works, what we started
+  R.mentor = canvasTex(1600, 900, (g, w, h) => {
+    g.fillStyle = '#0f1b48'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#16245c'; g.fillRect(60, 60, 560, 780);                                         // where the photo sits
+    const X = 680;
+    g.fillStyle = '#4cc3f2'; g.font = FONT(600, 24, "'JetBrains Mono', monospace"); g.letterSpacing = '6px'; g.fillText('YOUR MENTOR', X, 120); g.letterSpacing = '0px';
+    g.fillStyle = '#f2f4f8'; g.font = FONT(500, 70, DISPLAY); g.fillText('Capt. Choudhary Sourabh', X, 210);
+    g.fillStyle = 'rgba(242,244,248,0.75)'; g.font = FONT(600, 30); g.fillText('“Flyboy” · CEO & Founder, AviationSpot360', X, 262);
+    const facts = ['Boeing 737 type-rated pilot', 'First Officer in commercial operations (NSOP)', 'Flight training 2022–23, completed in about nine months', 'Started with no aviation background or connections'];
+    g.font = FONT(500, 30); facts.forEach((f, i) => { g.fillStyle = '#00a2e5'; g.fillRect(X, 336 + i * 62, 10, 10); g.fillStyle = '#f2f4f8'; g.fillText(f, X + 30, 348 + i * 62); });
+    g.fillStyle = 'rgba(242,244,248,0.9)'; g.font = `italic ${FONT(500, 34, DISPLAY)}`;
+    const q = ['“You don’t need to be born into aviation to', 'build a future in aviation. You need the right', 'mindset, the courage to begin, the discipline to', 'continue and the awareness to make the right decisions.”'];
+    q.forEach((l, i) => g.fillText(l, X, 640 + i * 46));
+  });
+  R.howto = canvasTex(800, 900, (g, w, h) => {
+    g.fillStyle = '#f5f4f0'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#111c44'; g.font = FONT(500, 56, DISPLAY); g.fillText('How mentorship', 50, 100); g.fillText('works', 50, 166);
+    const s = [['Choose a session', 'Career guidance, subject doubts, a topic, or a full programme'], ['Pick an open slot', 'From the mentor’s published availability'], ['Confirm', 'Your booking and its details by email'], ['Meet 1-on-1', 'Questions answered without long threads']];
+    s.forEach(([t, d], i) => { const y = 260 + i * 150;
+      g.fillStyle = '#00a2e5'; g.beginPath(); g.arc(80, y, 26, 0, 7); g.fill(); g.fillStyle = '#fff'; g.font = FONT(700, 28); g.textAlign = 'center'; g.fillText(String(i + 1), 80, y + 10); g.textAlign = 'left';
+      g.fillStyle = '#111c44'; g.font = FONT(700, 34); g.fillText(t, 130, y + 4);
+      g.fillStyle = '#5a6078'; g.font = FONT(500, 24); const words = d.split(' '); let line = '', ly = y + 44; for (const wd of words) { if (g.measureText(line + wd).width > 600) { g.fillText(line, 130, ly); line = ''; ly += 32; } line += wd + ' '; } g.fillText(line, 130, ly); });
+  });
+  R.since = canvasTex(800, 900, (g, w, h) => {
+    g.fillStyle = '#111c44'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#4cc3f2'; g.font = FONT(600, 22, "'JetBrains Mono', monospace"); g.letterSpacing = '5px'; g.fillText('SINCE 5 APRIL 2024', 50, 90); g.letterSpacing = '0px';
+    g.fillStyle = '#f2f4f8'; g.font = FONT(500, 50, DISPLAY); g.fillText('What we started', 50, 160);
+    const s = ['Dedicated aviation mentorship for students, cadets and parents', 'Self-study mentorship programmes for DGCA preparation', 'Recalled DGCA questions shared after every examination', 'Weekly WPC RTR predicted papers (85–89% reported accuracy)'];
+    g.font = FONT(500, 27); s.forEach((t, i) => { let y = 250 + i * 150; g.fillStyle = '#00a2e5'; g.fillRect(50, y - 20, 8, 60);
+      const words = t.split(' '); let line = ''; g.fillStyle = '#f2f4f8'; for (const wd of words) { if (g.measureText(line + wd).width > 640) { g.fillText(line, 76, y); line = ''; y += 36; } line += wd + ' '; } g.fillText(line, 76, y); });
+    g.fillStyle = 'rgba(242,244,248,0.7)'; g.font = `italic ${FONT(500, 30, DISPLAY)}`; g.fillText('Facts over false promises.', 50, 850);
   });
   // Small framed photographs: skies and runways at different times of day
   R.photo = (i) => canvasTex(300, 220, (g, w, h) => {
@@ -1481,6 +1534,32 @@ function roomTextures() {
   return R;
 }
 
+/** the screens' motion: on Room A's path a light runs along the line and wakes each step as it passes, the cadet
+ *  route's dashes flow, a slow sheen crosses the glass; on Room B's profile an accent line draws under the name */
+const SCREEN_SPOTS = {};
+function slideAnim(g, w, h, t) {
+  const x0 = 120, x1 = w - 120, y = 360, n = 7, dx = (x1 - x0) / (n - 1), k = (t % 6) / 4.5, lx = x0 + Math.min(1, k) * (x1 - x0);
+  g.save();
+  const lg = g.createLinearGradient(x0, 0, lx, 0); lg.addColorStop(0, 'rgba(0,162,229,0)'); lg.addColorStop(1, 'rgba(0,162,229,0.95)');
+  g.strokeStyle = lg; g.lineWidth = 6; g.beginPath(); g.moveTo(x0, y); g.lineTo(lx, y); g.stroke();
+  if (k <= 1) { const rg = g.createRadialGradient(lx, y, 0, lx, y, 46); rg.addColorStop(0, 'rgba(120,220,255,0.9)'); rg.addColorStop(1, 'rgba(120,220,255,0)'); g.fillStyle = rg; g.beginPath(); g.arc(lx, y, 46, 0, 7); g.fill(); }
+  for (let i = 0; i < n; i++) { const x = x0 + i * dx, since = (lx - x) / 300; if (since < 0 || since > 1.4) continue;
+    g.strokeStyle = `rgba(76,195,242,${Math.max(0, 0.8 - since * 0.6)})`; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 16 + since * 26, 0, 7); g.stroke(); }
+  g.strokeStyle = 'rgba(0,162,229,0.9)'; g.lineWidth = 3; g.setLineDash([12, 10]); g.lineDashOffset = -t * 40;
+  g.beginPath(); g.moveTo(x0, y + 140); g.quadraticCurveTo(x0, y + 230, x0 + 140, y + 230); g.lineTo(x1 - 140, y + 230); g.quadraticCurveTo(x1, y + 230, x1, y + 140); g.stroke(); g.setLineDash([]);
+  g.restore();
+}
+function mentorAnim(g, w, h, t) {
+  const k = Math.min(1, (t % 7) / 1.6), X = 680;
+  g.fillStyle = '#00a2e5'; g.fillRect(X, 226, 700 * (1 - Math.pow(1 - k, 3)), 5);
+  const p = 0.5 + 0.5 * Math.sin(t * 2.2); g.fillStyle = `rgba(76,195,242,${0.35 + 0.4 * p})`; g.beginPath(); g.arc(X + 280, 112, 7, 0, 7); g.fill(); // a live dot by YOUR MENTOR
+}
+let SHEEN = null;
+function screenSheen() {
+  SHEEN ??= new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+    map: canvasTex(256, 128, (g, w, h) => { const lg = g.createLinearGradient(0, 0, w, h); lg.addColorStop(0, 'rgba(255,255,255,0.10)'); lg.addColorStop(0.35, 'rgba(255,255,255,0.03)'); lg.addColorStop(0.36, 'rgba(255,255,255,0)'); lg.addColorStop(1, 'rgba(255,255,255,0.02)'); g.fillStyle = lg; g.fillRect(0, 0, w, h); }) });
+  return SHEEN;
+}
 function buildRooms() {
   const R = roomTextures();
   const { z0, z1, h } = ROOM;
@@ -1514,8 +1593,14 @@ function buildRooms() {
 
   /* Room A: Cadet Prep classroom, desks facing a display on the navy end wall */
   const ax = -4.05;
-  box(3.5, 1.78, 0.06, M.frameBlack, ax, 1.75, z1 + 0.05);
-  panel(3.4, 1.7, new THREE.MeshStandardMaterial({ map: R.slideA, emissive: 0xffffff, emissiveMap: R.slideA, emissiveIntensity: 0.55, roughness: 0.8 }), ax, 1.75, z1 + 0.085, '+z');
+  // a slim wall-mounted display: a rounded satin-black bezel, the live screen, a faint glass sheen
+  const bezel = new THREE.MeshStandardMaterial({ color: 0x0c0d10, roughness: 0.28, metalness: 0.35 });
+  rbox(3.5, 1.8, 0.07, 0.025, bezel, ax, 1.75, z1 + 0.06);
+  const slide = screenTex(R.slideA, slideAnim, 'A');
+  panel(3.42, 1.71, new THREE.MeshStandardMaterial({ map: slide, emissive: 0xffffff, emissiveMap: slide, emissiveIntensity: 0.85, roughness: 0.32, metalness: 0 }), ax, 1.75, z1 + 0.097, '+z');
+  panel(3.42, 1.71, screenSheen(), ax, 1.75, z1 + 0.099, '+z', scene, { cast: false, receive: false });
+  box(0.16, 0.05, 0.05, bezel, ax, 0.84, z1 + 0.08); // the stand-by LED housing
+  SCREEN_SPOTS.A = { c: new THREE.Vector3(ax, 1.75, z1 + 0.1), w: 3.42, h: 1.71 };
   box(0.6, 0.04, 0.12, M.metalDark, ax, 0.82, z1 + 0.12); // soundbar
   // lectern
   box(0.62, 1.05, 0.46, M.wood, -6.6, 0.525, z1 + 1.2);
@@ -1543,8 +1628,18 @@ function buildRooms() {
   const bx = 4.6, bz = z1 + 2.4;
   // oak slat feature on the end wall with the runway print
   for (let i = 0; i < 26; i++) box(0.05, h, 0.05, M.wood, bx - 1.5 + i * 0.12, h / 2, z1 + 0.04);
-  box(1.92, 1.12, 0.04, M.frameBlack, bx, 1.85, z1 + 0.1);
-  panel(1.8, 1.04, M.poster, bx, 1.85, z1 + 0.125, '+z');
+  // the mentor's profile on the slat wall, his photograph on it, and two boards either side
+  rbox(2.5, 1.45, 0.07, 0.025, new THREE.MeshStandardMaterial({ color: 0x0c0d10, roughness: 0.28, metalness: 0.35 }), bx, 1.78, z1 + 0.1);
+  const prof = screenTex(R.mentor, mentorAnim, 'B');
+  panel(2.4, 1.35, new THREE.MeshStandardMaterial({ map: prof, roughness: 0.32, emissive: 0xffffff, emissiveMap: prof, emissiveIntensity: 0.8 }), bx, 1.78, z1 + 0.137, '+z');
+  const face = new THREE.TextureLoader().load('brand/founder.webp'); face.colorSpace = THREE.SRGBColorSpace; face.anisotropy = MAX_ANISO;
+  panel(0.84, 1.17, new THREE.MeshBasicMaterial({ map: face }), bx - 1.2 + 0.51, 1.78, z1 + 0.139, '+z', scene, { cast: false, receive: false }); // (the board's photo panel: 60-620 px of 1600)
+  panel(2.4, 1.35, screenSheen(), bx, 1.78, z1 + 0.141, '+z', scene, { cast: false, receive: false });
+  SCREEN_SPOTS.B = { c: new THREE.Vector3(bx, 1.78, z1 + 0.14), w: 2.4, h: 1.35 };
+  box(1.24, 1.39, 0.04, M.frameBlack, 7.25, 1.75, z1 + 0.06);
+  panel(1.18, 1.33, new THREE.MeshStandardMaterial({ map: R.howto, roughness: 0.85 }), 7.25, 1.75, z1 + 0.085, '+z');
+  box(1.24, 1.39, 0.04, M.frameBlack, 2.05, 1.75, z1 + 0.06);
+  panel(1.18, 1.33, new THREE.MeshStandardMaterial({ map: R.since, roughness: 0.85 }), 2.05, 1.75, z1 + 0.085, '+z');
   // desk
   box(1.7, 0.05, 0.82, M.wood, bx, 0.75, bz);
   box(1.6, 0.6, 0.03, M.woodDark, bx, 0.43, bz - 0.36);
@@ -1583,8 +1678,8 @@ function buildRooms() {
   }
   // pendant over the desk, plants in the corners
   pendant(bx, bz, 2.3);
-  plant(7.4, z1 + 0.6, { height: 1.7, spread: 0.5, leaves: 85, light: true });
-  plant(1.45, z1 + 0.6, { height: 1.3, spread: 0.45, leaves: 60 });
+  plant(7.45, z1 + 1.9, { height: 1.7, spread: 0.5, leaves: 85, light: true });
+  plant(1.4, z1 + 1.9, { height: 1.3, spread: 0.45, leaves: 60 });
   void bx; void bz; // (the desk lamp glows without a light of its own: each light is compiled into every shader)
 }
 
@@ -2735,7 +2830,7 @@ const AUDIO = { ctx: null, on: false };
 function noiseBuffer(ctx) { const b2 = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = b2.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; return b2; }
 function setSound(on) {
   AUDIO.on = on;
-  const btn = document.getElementById('soundBtn'); if (btn) { btn.setAttribute('aria-pressed', String(on)); btn.textContent = on ? 'Sound on' : 'Sound off'; }
+  const btn = document.getElementById('soundBtn'); if (btn) { btn.setAttribute('aria-pressed', String(on)); const l = btn.querySelector('span'); if (l) l.textContent = on ? 'On' : 'Off'; }
   if (!on) { AUDIO.master?.gain.setTargetAtTime(0, AUDIO.ctx.currentTime, 0.2); return; }
   if (!AUDIO.ctx) {
     const ctx = AUDIO.ctx = new AudioContext(), master = AUDIO.master = ctx.createGain(); master.gain.value = 0; master.connect(ctx.destination);
@@ -3014,7 +3109,7 @@ function upgradeAirside(md) {
     mine.forEach((o) => o.removeFromParent());
     air.add(parkedGroup(md[kind], spots));
   }
-  if (md.g650) air.add(parkedGroup(md.g650, [[96, -44, -Math.PI / 2 + 0.35]])); // the academy's business jet by its hangar
+  if (md.g650) air.add(parkedGroup(md.g650, [[186, -44, -Math.PI / 2 + 0.35]])); // the academy's business jet by its hangar
 
 }
 
@@ -3056,7 +3151,7 @@ function buildAirside() {
   AIRFIELD.push(grass);
 
   // ground layers: grass everywhere, apron, service road, taxiway, connectors, runway
-  panel(520, 92, apronMat, 0, 0.02, -23 - 46, 'up', air);
+  panel(520, 71, apronMat, 0, 0.02, -23 - 35.5, 'up', air); // (the ramp stops 12 m short of taxiway K: grass between, two links out)
   panel(520, 7, tarmacAt(520, 7), 0, 0.03, -33, 'up', air);
   const twy = (x0, x1, z0, z1) => panel(Math.abs(x1 - x0), Math.abs(z1 - z0), tarmacAt(Math.abs(x1 - x0), Math.abs(z1 - z0)), (x0 + x1) / 2, 0.025, (z0 + z1) / 2, 'up', air);
   const route = buildRoute();
@@ -3099,11 +3194,9 @@ function buildAirside() {
   }
   // taxiway and apron paint
 
-  box(520, 0.01, 0.3, yellow, 0, 0.035, -104, air, { cast: false });
+  box(520, 0.01, 0.3, yellow, 0, 0.035, -93.6, air, { cast: false });
   for (const x of route.conn) box(0.3, 0.01, Math.abs(RWY_Z - TWY_Z), yellow, x, 0.04, (RWY_Z + TWY_Z) / 2, air, { cast: false });
   for (const x of route.conn) holdLine(x, RWY_Z + 90, -1, yellow, air);
-  const STANDS = [-125, -70, -15];
-  for (const x of STANDS) { box(0.3, 0.01, 40, yellow, x, 0.035, -84, air, { cast: false }); box(6, 0.01, 0.4, yellow, x, 0.035, -63, air, { cast: false }); }
   for (let x = -250; x < 250; x += 6) box(3, 0.01, 0.2, white, x, 0.04, -36.6, air, { cast: false }); // road edge
 
   // lights: runway edge (white), threshold (green), end (red), approach + sequenced flasher, taxiway (green / blue)
@@ -3135,7 +3228,7 @@ function buildAirside() {
 
 
   // academy hangar with the logo, to the east
-  const hx = 120, hz = -75;
+  const hx = 210, hz = -75; // (east of the school's ramp)
   const hangarSkin = new THREE.MeshStandardMaterial({ color: 0x2a3760, roughness: 0.75, metalness: 0.35 });
   hangarSkin.userData.rep = [26, 7];
   RIBBED.push(hangarSkin);
@@ -3165,37 +3258,8 @@ function buildAirside() {
   const backLogo = panel(6.8, 6.8 * (473 / 1564), M.logo, 0, 6.6, -23.31, '-z', air, { cast: false, receive: false });
   backLogo.renderOrder = 2;
 
-  // the academy's own fleet: four trainers in brand colours, close to the building
-  const fleet = [M.paintNavy, M.paintNavy, new THREE.MeshStandardMaterial({ color: 0x1f6f8a, roughness: 0.7 }), M.paintNavy];
-  [-10, -22, -34, -46].forEach((x, i) => {
-    const tr = bakeGroup(trainer(fleet[i]));
-    tr.position.set(x, 0, -50);
-    tr.rotation.y = -Math.PI / 2 + (i === 2 ? 0.25 : 0);
-    tr.userData.dynamic = true; // a placeholder until the Cessna 182 model arrives
-    air.add(tr);
-    AIRSIDE.placeholders.trainers.push(tr);
-    blob(x, -50, 11, 9);
-    for (const s of [-1, 1]) cyl(0.08, 0.15, 0.45, new THREE.MeshStandardMaterial({ color: 0xff6a1a, roughness: 0.8 }), x + s * 5.6, 0.22, -49.2, air, 10); // wingtip cones
-  });
 
-  // parked airliners on their stands, nose toward the building
-  const tails = [new THREE.MeshStandardMaterial({ color: 0xa8322d, roughness: 0.7 }), M.paintNavy, new THREE.MeshStandardMaterial({ color: 0x1f7a7a, roughness: 0.7 })];
-  STANDS.forEach((x, i) => {
-    const jet = bakeGroup(airliner({ tail: tails[i], gear: true }));
-    jet.scale.setScalar(40);
-    jet.position.set(x, 4.2, -86);
-    jet.rotation.y = -Math.PI / 2;
-    jet.userData.dynamic = true; // a placeholder until the A320 model arrives
-    air.add(jet);
-    AIRSIDE.placeholders.jets.push(jet);
-    blob(x, -86, 40, 42);
-    for (const dz of [-2, 2]) cyl(0.12, 0.25, 0.7, new THREE.MeshStandardMaterial({ color: 0xff6a1a, roughness: 0.8 }), x + 2.5, 0.35, -66 + dz, air, 10);
-  });
-  const ft = fuelTruck();
-  ft.position.set(-58, 0, -78); ft.rotation.y = Math.PI / 2 + 0.2;
-  air.add(ft);
-  blob(-58, -78, 5, 11);
-  STANDS.forEach((x, i) => turnaround(x, -86, 1, `${31 + i}`, air, { bus: i !== 2 }));
+  buildRamp(air, { yellow, white, tarmacAt, blob });
 
   // moving traffic: four airliners on the loop, a follow-me car and a baggage train
   const tailMat = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.7 });
@@ -3226,17 +3290,10 @@ function buildAirside() {
   air.add(car);
   const carPath = new THREE.CatmullRomCurve3([[170, -31.2], [0, -31.2], [-170, -31.2], [-177, -33.2], [-170, -35.2], [0, -35.2], [170, -35.2], [177, -33.2]].map(([x, z]) => new THREE.Vector3(x, 0, z)), true, 'centripetal');
   AIRSIDE.vehicles.push({ g: car, path: carPath, speed: 9, phase: 0 });
-  for (const [mk, sp] of [[() => apronBus(), 7], [van, 8.5], [van, 10]]) {
+  for (const [mk, sp] of [[van, 8.5], [van, 10]]) {
     const v = bakeGroup(mk()); v.userData.dynamic = true; air.add(v);
     AIRSIDE.vehicles.push({ g: v, path: carPath, speed: sp, phase: 0, t0: AIRSIDE.vehicles.length * 23 });
   }
-  for (const [x, z] of [[-125, -80], [-70, -78], [-15, -82]]) {
-    const loop = new THREE.CatmullRomCurve3([[x + 6, z + 8], [x + 12, z - 6], [x - 6, z - 10], [x - 9, z + 6]].map(([a, b]) => new THREE.Vector3(a, 0, b)), true);
-    const c = crewman(x > -50); c.userData.dynamic = true; air.add(c);
-    AIRSIDE.vehicles.push({ g: c, path: loop, speed: 1.3, phase: 0, t0: x });
-  }
-  const train = tugTrain().map((p) => { const b = bakeGroup(p); b.userData.dynamic = true; air.add(b); return b; });
-  AIRSIDE.vehicles.push({ train, cx: -70, cz: -59, rx: 48, rz: 4.5, speed: 5 });
 
   buildIGI(air, { white, yellow, tarmacAt, apronMat });
   buildHangars(air, apronMat);
@@ -3793,6 +3850,129 @@ function buildHangars(air, apronMat) {
   }
   glowPoints(glow, 0xfff1d8, 2.4, air);
 }
+/** The flight school's ramp behind the academy: one line of trainers noses-north on painted Ts, facing a yellow
+ *  taxi lane (z -80), each chocked and tied down with wingtip cones and a remove-before-flight flag; extinguisher
+ *  trolleys, an avgas island at the west end, a refuel under way, pilots walking round before flight; two links
+ *  out across the grass to taxiway K, at J3 (x -150) and x 190. Spots -60 and 60 are the cadet's and the taxiing
+ *  trainer's (see buildCadetRoute, buildFieldExtras). */
+const RAMP = { z: -58, lane: -80, cadetX: -60, taxiX: 60, links: [-150, 160] };
+function buildRamp(air, { yellow, white, tarmacAt, blob }) {
+  const g = new THREE.Group(), o = { cast: true, receive: true }, K = kitMats();
+  const red = new THREE.MeshStandardMaterial({ color: 0xc8201b, roughness: 0.55 }), rope = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.9 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x8d9399, roughness: 0.5, metalness: 0.6 }), coneM = new THREE.MeshStandardMaterial({ color: 0xff6a1a, roughness: 0.8 });
+  const Z = RAMP.z, fleet = [M.paintNavy, new THREE.MeshStandardMaterial({ color: 0x1f6f8a, roughness: 0.7 })];
+  // the lane and its links to K: centrelines, the links' pavement over the grass, a holding position on each
+  box(410, 0.01, 0.3, yellow, -30, 0.036, RAMP.lane, air, { cast: false });
+  for (const lx of RAMP.links) {
+    panel(14, 13, tarmacAt(14, 13), lx, 0.025, -100, 'up', air);
+    box(0.3, 0.01, 38, yellow, lx, 0.04, -99, air, { cast: false });
+    for (const [dz, dash] of [[-102.5, false], [-103.2, false], [-104.2, true], [-104.9, true]]) for (let x = -6; x < 6; x += dash ? 1.2 : 12) box(dash ? 0.7 : 12, 0.01, 0.18, yellow, lx + (dash ? x + 0.35 : 0), 0.042, dz, air, { cast: false });
+  }
+  for (let i = 0, x = -204; x <= 156; x += 24, i++) {
+    // the painted T: a lead line from the lane, the bar the main wheels stop on
+    box(0.25, 0.01, Z + 1.2 - RAMP.lane, yellow, x, 0.036, (RAMP.lane + Z + 1.2) / 2, air, { cast: false });
+    box(6, 0.01, 0.25, yellow, x, 0.036, Z + 1.2, air, { cast: false });
+    if (x === RAMP.cadetX || x === RAMP.taxiX) continue;                                   // (theirs: out flying, or about to)
+    const tr = bakeGroup(trainer(fleet[i % 2])); tr.position.set(x, 0, Z); tr.rotation.y = Math.PI / 2; tr.userData.dynamic = true;
+    air.add(tr); AIRSIDE.placeholders.trainers.push(tr); blob(x, Z, 11, 9);
+    for (const s of [-1, 1]) { box(0.35, 0.18, 0.2, K.yel, x + s * 1.25, 0.09, Z + 0.55, g, o);                 // main-wheel chocks
+      cyl(0.07, 0.15, 0.45, coneM, x + s * 6, 0.22, Z + 0.4, g, 10, o);                                          // wingtip cones
+      const tie = box(0.025, 1.5, 0.025, rope, x + s * 4.2, 0.78, Z + 0.15, g, o); tie.rotation.z = s * 0.16;    // tie-downs to ground rings
+      cyl(0.09, 0.09, 0.05, steel, x + s * 4.32, 0.03, Z + 0.15, g, 10, o); }
+    box(0.35, 0.18, 0.2, K.yel, x, 0.09, Z - 3.2, g, o);                                                       // nose-wheel chock
+    box(0.05, 0.32, 0.02, red, x + 2.4, 1.72, Z - 0.7, g, { cast: false, receive: true });                      // remove-before-flight flag
+    if (i % 4 === 1) { cyl(0.16, 0.16, 0.75, red, x + 12, 0.55, Z - 2, g, 12, o); box(0.5, 0.06, 0.4, steel, x + 12, 0.16, Z - 2, g, o); // an extinguisher trolley
+      for (const s of [-1, 1]) cyl(0.12, 0.12, 0.05, rope, x + 12 + s * 0.22, 0.12, Z - 2, g, 10, o).rotation.x = Math.PI / 2; }
+  }
+  // a tow bar left by the second trainer
+  box(0.08, 0.08, 2.4, K.yel, -180 + 1.3, 0.18, Z - 6.2, g, o).rotation.y = 0.5;
+  // the avgas island: a kerbed slab, two pumps, a canopy and its sign
+  const IX = -236, IZ = -76;
+  box(10, 0.25, 4, white, IX, 0.125, IZ, g, o);
+  for (const dx of [-2.2, 2.2]) { box(0.8, 1.6, 0.6, red, IX + dx, 1.05, IZ, g, o); box(0.82, 0.35, 0.62, white, IX + dx, 1.7, IZ, g, o); }
+  for (const [dx, dz] of [[-4.6, -1.6], [4.6, -1.6], [-4.6, 1.6], [4.6, 1.6]]) cyl(0.12, 0.12, 4.2, steel, IX + dx, 2.1, IZ + dz, g, 8, o);
+  box(11, 0.4, 5, white, IX, 4.3, IZ, g, o);
+  const avgas = new THREE.MeshStandardMaterial({ roughness: 0.6, emissive: 0xffffff, emissiveIntensity: 0.1, map: canvasTex(512, 96, (c, w, h) => { c.fillStyle = '#c8201b'; c.fillRect(0, 0, w, h); c.fillStyle = '#fff'; c.font = FONT(800, 58, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('AVGAS 100LL', w / 2, h / 2 + 2); }) });
+  panel(5.4, 1, avgas, IX, 4.3, IZ - 2.52, '-z', g, { cast: false, receive: false });
+  // a refuel under way at the east end of the line: the bowser by the wing, its hose up to the filler
+  const bw = fuelTruck(); bw.position.set(146, 0, Z - 8.5); bw.rotation.y = 0; air.add(bw); blob(146, Z - 8.5, 9, 5);
+  box(0.06, 0.06, 6.8, rope, 136, 1.0, Z - 4.8, g, o).rotation.x = 0.28;
+  // ---- the rest of a working flight line ----
+  const navyM = M.paintNavy, glassM = new THREE.MeshStandardMaterial({ color: 0x1b2a44, roughness: 0.12, metalness: 0.4 });
+  const walkM = new THREE.MeshStandardMaterial({ color: 0x2f8a4c, roughness: 0.85 }), tyreM = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
+  const lampM = new THREE.MeshStandardMaterial({ color: 0xf4f2ea, roughness: 0.3, emissive: 0xfff0cc, emissiveIntensity: 0.5 });
+  const wheelsAt = (grp, pts, r, w) => { for (const [x, z] of pts) { const m = cyl(r, r, w, tyreM, x, r, z, grp, 12, o); m.rotation.x = Math.PI / 2; } };
+  // stand numbers, painted at the head of each lead line and read from the campus side (one atlas, one material)
+  const numMat = new THREE.MeshStandardMaterial({ roughness: 0.85, alphaTest: 0.35, map: canvasTex(1024, 64, (c, w, h) => {
+    c.fillStyle = '#e2b52c'; c.font = FONT(800, 50, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle';
+    for (let k = 0; k < 16; k++) c.fillText(String(k + 1), (k + 0.5) * 64, h / 2 + 3); }) });
+  for (let k = 0, x = -204; x <= 156; x += 24, k++) {
+    const geo = new THREE.PlaneGeometry(2.4, 2.4), uv = geo.attributes.uv; for (let j = 0; j < uv.count; j++) uv.setX(j, (k + uv.getX(j)) / 16);
+    const m = new THREE.Mesh(geo, numMat); m.rotation.x = -Math.PI / 2; m.position.set(x + 2, 0.04, RAMP.lane + 6); m.receiveShadow = true; g.add(m);
+  }
+  // the flight-line hut behind the line: dispatch and the kettle; a window on the aircraft, a bench, a green safety
+  // walkway in from the campus with bollards at its mouth, and the instructors' buggy
+  const HX = -96, HZ = -38;
+  box(6.4, 3, 3.6, K.white, HX, 1.5, HZ, g, o); box(7.4, 0.25, 4.6, navyM, HX, 3.12, HZ, g, o);
+  box(5.2, 1.1, 0.06, glassM, HX, 1.85, HZ - 1.82, g, o); box(1.0, 2.1, 0.06, navyM, HX + 2.3, 1.05, HZ + 1.82, g, o);
+  const lineSign = new THREE.MeshStandardMaterial({ roughness: 0.6, emissive: 0xffffff, emissiveIntensity: 0.08, map: canvasTex(512, 96, (c, w, h) => {
+    c.fillStyle = '#111c44'; c.fillRect(0, 0, w, h); c.fillStyle = '#fff'; c.font = FONT(800, 52, 'Arial, sans-serif'); c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('FLIGHT LINE', w / 2, h / 2 + 2); }) });
+  panel(3.6, 0.68, lineSign, HX, 2.72, HZ - 1.86, '-z', g, { cast: false, receive: false });
+  box(2.2, 0.08, 0.5, M.wood, HX - 1.5, 0.48, HZ - 2.4, g, o); for (const dx of [-0.9, 0.9]) box(0.08, 0.44, 0.42, steel, HX - 1.5 + dx, 0.22, HZ - 2.4, g, o);
+  cyl(0.14, 0.14, 0.6, red, HX + 3.35, 1.1, HZ - 1.2, g, 10, o);                                              // the hut's extinguisher
+  panel(2, 26, walkM, HX - 5, 0.03, -37, 'up', g, { cast: false, receive: true });
+  for (const dx of [-1.05, 1.05]) box(0.12, 0.01, 26, K.white, HX - 5 + dx, 0.034, -37, g, { cast: false });
+  for (const dx of [-1.5, 1.5]) { cyl(0.11, 0.11, 0.9, K.yel, HX - 5 + dx, 0.45, -24.6, g, 10, o); cyl(0.12, 0.12, 0.08, K.dark, HX - 5 + dx, 0.93, -24.6, g, 10, o); }
+  { const c = new THREE.Group();                                                                              // the buggy: two seats and a canopy
+    box(2.4, 0.4, 1.2, K.white, 0, 0.45, 0, c, o); box(0.6, 0.5, 1.16, K.white, 0.95, 0.85, 0, c, o); box(0.5, 0.5, 1.1, navyM, -0.15, 0.95, 0, c, o);
+    box(0.7, 0.12, 1.1, navyM, 0.15, 0.72, 0, c, o); for (const [px, pz] of [[0.9, -0.52], [0.9, 0.52], [-0.95, -0.52], [-0.95, 0.52]]) box(0.05, 1.3, 0.05, steel, px, 1.3, pz, c, o);
+    box(2.2, 0.06, 1.3, navyM, 0, 1.98, 0, c, o); wheelsAt(c, [[0.8, -0.58], [0.8, 0.58], [-0.8, -0.58], [-0.8, 0.58]], 0.22, 0.16);
+    c.position.set(HX + 6.5, 0, HZ + 1.2); c.rotation.y = 0.35; g.add(c); }
+  box(1.6, 0.06, 0.6, K.yel, HX + 4.2, 0.6, HZ - 2.4, g, o);                                                  // a rack of spare chocks
+  for (let k = 0; k < 4; k++) box(0.34, 0.17, 0.2, K.yel, HX + 3.7 + k * 0.36, 0.72, HZ - 2.4, g, o);
+  // a small tug for the trainers, by the tow bar
+  { const t = new THREE.Group(); box(1.9, 0.6, 1.1, K.yel, 0, 0.45, 0, t, o); box(0.5, 0.45, 0.6, K.dark, -0.4, 0.95, 0, t, o); box(0.08, 0.7, 0.08, steel, 0.7, 1.05, 0, t, o);
+    box(0.5, 0.06, 0.06, K.dark, 0.7, 1.4, 0, t, o); wheelsAt(t, [[0.6, -0.58], [0.6, 0.58], [-0.6, -0.58], [-0.6, 0.58]], 0.24, 0.2);
+    t.position.set(-183, 0, Z - 9); t.rotation.y = 0.5; g.add(t); }
+  // battery start carts at two trainers, their cables up to the cowling
+  for (const x of [-156, 12]) { box(1.1, 0.6, 0.7, red, x + 2.4, 0.55, Z - 5, g, o); box(1.12, 0.12, 0.72, K.yel, x + 2.4, 0.9, Z - 5, g, o);
+    wheelsAt(g, [[x + 2.0, Z - 5.38], [x + 2.0, Z - 4.62], [x + 2.8, Z - 5.38], [x + 2.8, Z - 4.62]], 0.13, 0.08);
+    box(0.04, 0.04, 2.6, rope, x + 1.3, 0.8, Z - 3.9, g, o).rotation.set(0.25, 0.75, 0); }
+  // a trainer in for maintenance: a step ladder at the nose, the cowling off on a mat, a tool chest, the engineer
+  { const x = 108;
+    for (const s of [-1, 1]) { const r = box(0.07, 2.1, 0.07, K.yel, x + 1.0 + s * 0.3, 1.0, Z - 4.3, g, o); r.rotation.z = s * 0.12; }
+    for (let k = 0; k < 4; k++) box(0.62, 0.04, 0.2, steel, x + 1.0, 0.4 + k * 0.45, Z - 4.3, g, o);
+    box(2.2, 0.02, 1.4, K.dark, x - 2.8, 0.02, Z - 6, g, o); box(1.3, 0.35, 0.9, K.white, x - 2.8, 0.2, Z - 6, g, o);
+    box(0.9, 1.0, 0.55, red, x + 3.0, 0.62, Z - 5.2, g, o); for (let k = 0; k < 4; k++) box(0.92, 0.02, 0.57, steel, x + 3.0, 0.3 + k * 0.22, Z - 5.2, g, o);
+    wheelsAt(g, [[x + 2.65, Z - 5.4], [x + 3.35, Z - 5.4], [x + 2.65, Z - 5.0], [x + 3.35, Z - 5.0]], 0.06, 0.05);
+    const eng = crewman(true); eng.position.set(x + 0.2, 0, Z - 4.6); eng.rotation.y = Math.PI; air.add(eng); }
+  // a marshaller beside the taxi-out stand, wands up
+  { const mm = crewman(true, true); mm.position.set(RAMP.taxiX - 7, 0, Z - 11); mm.rotation.y = Math.PI / 2; air.add(mm); }
+  // floodlight masts along the back of the ramp
+  for (const x of [-200, -40, 120]) { cyl(0.18, 0.26, 16, steel, x, 8, -25.5, g, 10, o); box(2.6, 0.18, 0.5, steel, x, 16.1, -25.5, g, o);
+    for (const dx of [-0.95, -0.32, 0.32, 0.95]) { const l = box(0.55, 0.4, 0.22, lampM, x + dx, 15.8, -25.85, g, o); l.rotation.x = -0.45; } }
+  // a ramp windsock by the fuel island
+  { const sockMat = new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide, map: canvasTex(256, 32, (c2, w, h) => { for (let i = 0; i < 5; i++) { c2.fillStyle = i % 2 ? '#f4f4f0' : '#ff6a1a'; c2.fillRect(i * w / 5, 0, w / 5, h); } }) });
+    const sx = -252, sz = -90; cyl(0.05, 0.07, 4.5, K.white, sx, 2.25, sz, g, 8, o);
+    const sock = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.14, 2.4, 12, 1, true).rotateZ(-Math.PI / 2).translate(1.2, 0, 0), sockMat);
+    sock.position.set(sx, 4.35, sz); sock.castShadow = true; sock.userData.keep = true;
+    sock.onBeforeRender = () => { const t = NOW / 1000; sock.rotation.set(0, 0.35 + Math.sin(t * 0.7) * 0.18, -0.1 + Math.sin(t * 1.9) * 0.06); sock.updateMatrixWorld(); };
+    air.add(sock); }
+  // FOD bins along the lane, between the stands
+  for (const x of [-168, -72, 36, 132]) { cyl(0.3, 0.27, 0.8, K.yel, x, 0.4, RAMP.lane + 3.6, g, 12, o); cyl(0.32, 0.32, 0.08, red, x, 0.84, RAMP.lane + 3.6, g, 12, o); }
+  // by the fuel island: oil drums on a pallet, a spill kit
+  box(1.3, 0.14, 1.3, M.wood, IX - 7, 0.07, IZ + 2, g, o);
+  for (const [dx, dz, m] of [[-0.32, -0.32, navyM], [0.32, -0.32, red], [-0.32, 0.32, red], [0.32, 0.32, navyM]]) cyl(0.29, 0.29, 0.88, m, IX - 7 + dx, 0.58, IZ + 2 + dz, g, 14, o);
+  box(0.8, 0.7, 0.6, K.yel, IX + 6.6, 0.35, IZ + 2, g, o); box(0.82, 0.08, 0.62, red, IX + 6.6, 0.72, IZ + 2, g, o);
+  const kb = bakeGroup(g); kb.userData.dynamic = true; air.add(kb);
+  // people: a pilot walking round a trainer before flight, an instructor and a student on the line, a refueller
+  const walk = (pts, who, speed, t0) => { const p = who; p.userData.dynamic = true; air.add(p);
+    AIRSIDE.vehicles.push({ g: p, path: new THREE.CatmullRomCurve3(pts.map(([x, z]) => new THREE.Vector3(x, 0, z)), true), speed, phase: 0, t0 }); };
+  walk([[-132 - 6.5, Z - 1], [-132, Z - 5.5], [-132 + 6.5, Z - 1], [-132 + 3, Z + 4], [-132 - 3, Z + 4]], person(0xf4f3ee), 0.9, 0);
+  walk([[-6, Z - 12], [30, Z - 12], [40, Z - 14], [30, Z - 16], [-6, Z - 16], [-12, Z - 14]], person(0xf4f3ee), 1.25, 7);
+  walk([[-4, Z - 13], [30, Z - 13], [41, Z - 14.6], [30, Z - 15.4], [-4, Z - 15.4], [-11, Z - 14.2]], person(0x2f5f9e), 1.25, 8.5);
+  walk([[138, Z - 6], [142, Z - 3], [148, Z - 4], [144, Z - 7]], crewman(true), 0.6, 3);
+}
 /** The training field's own buildings, west of the hangar row along taxiway K: a small terminal with a glass airside
  *  front (its five remote stands come from data/airfield.json), the control tower, the fire station, the fuel farm,
  *  and the school's GA apron with a line of trainers (placeholders until the Cessna 182 model arrives). */
@@ -3848,14 +4028,6 @@ function buildFieldBuildings(air) {
   for (const dx of [-22, 0, 22]) { cyl(7, 7, 9, white, UX + dx, 4.5 + 0.6, UZ, g, 24, o); cyl(7.1, 7.1, 0.4, metal, UX + dx, 9.8, UZ, g, 24, o); }
   box(8, 3.5, 6, concrete, UX + 42, 1.75, UZ, g, o);
   const kb = bakeGroup(g); kb.userData.dynamic = true; air.add(kb);
-  // the GA apron: the school's trainers in a line, noses toward the taxiway, wingtip cones
-  const fleet = [M.paintNavy, new THREE.MeshStandardMaterial({ color: 0x1f6f8a, roughness: 0.7 })];
-  for (let i = 0; i < 10; i++) {
-    if (i === 3) continue; // (that one is out taxiing: see buildFieldExtras)
-    const x = -1515 + i * 22, tr = bakeGroup(trainer(fleet[i % 2]));
-    tr.position.set(x, 0, -72); tr.rotation.y = -Math.PI / 2; tr.userData.dynamic = true;
-    air.add(tr); AIRSIDE.placeholders.trainers.push(tr);
-  }
 }
 /** The rest of the training field: the terminal forecourt (car park, flags, palms, a bus shelter), the flying club
  *  with its roof terrace, a trainer taxiing out to K and back with pilots walking the line and a fuel bowser, the
@@ -3888,7 +4060,7 @@ function buildFieldExtras(air) {
   pm.frustumCulled = false; pm.userData.dynamic = true; pm.userData.noCast = true; air.add(pm);
   box(9, 0.2, 2.6, navy, -985, 2.8, -6, g, o); for (const x of [-989, -981]) box(0.12, 2.8, 0.12, steel, x, 1.4, -5, g, o); box(7, 0.5, 0.5, steel, -985, 0.5, -6.6, g, o);
   // the flying club: a low clubhouse with a roof terrace over the GA apron
-  const FX = -1490, FZ = -30;
+  const FX = -236, FZ = -36; // at the west end of the school's ramp
   box(32, 4.2, 13, white, FX, 2.1, FZ, g, o);
   box(30, 2.4, 0.2, new THREE.MeshStandardMaterial({ color: 0x3d5566, roughness: 0.1, metalness: 0.5 }), FX, 2.2, FZ - 6.55, g, { cast: false, receive: true });
   box(32.4, 0.3, 13.4, concrete, FX, 4.35, FZ, g, o);
@@ -3898,16 +4070,15 @@ function buildFieldExtras(air) {
   for (let i = 0; i < 5; i++) { box(1.1, 0.06, 1.1, white, FX - 10 + i * 3.2, 5.2, FZ - 3, g, o); cyl(0.04, 0.04, 0.7, steel, FX - 10 + i * 3.2, 4.85, FZ - 3, g, 6, o); }
   panel(16, 1.6, text('FLYING CLUB', 16, 1.6, '#111c44', '#ffffff'), FX, 3.5, FZ - 6.7, '-z', g, { cast: false, receive: false });
   // the bowser beside the line, and the trainer that taxis out (a placeholder until the Cessna arrives)
-  const ft = fuelTruck(); ft.position.set(-1500, 0, -58); ft.rotation.y = Math.PI / 2; air.add(ft);
   const taxi = new THREE.Group(); taxi.userData.dynamic = true; taxi.userData.body = taxi.add(bakeGroup(trainer(navy))).children.at(-1);
   circuitLights(taxi, 2); air.add(taxi);
   const cadet = new THREE.Group(); cadet.rotation.order = 'YZX'; cadet.userData.dynamic = true; cadet.visible = false;
   cadet.userData.body = cadet.add(bakeGroup(trainer(navy))).children.at(-1); circuitLights(cadet, 1); air.add(cadet);
   AIRSIDE.taxiTrainers = [taxi, cadet]; CADET.plane = cadet; CADET.taxi = taxi; CADET.route = buildCadetRoute();
-  const tp = [[-1452, -70], [-1452, -100], [-1470, -114], [-1640, -114], [-1662, -118], [-1640, -122], [-1460, -122], [-1446, -104], [-1446, -78], [-1449, -64]];
+  const L = RAMP.links[1], tx = RAMP.taxiX, tz = RAMP.z, tp = [[tx - 2, tz - 2], [tx - 2, tz - 14], [tx + 12, tz - 22], [L - 14, -80], [L - 2, -88], [L - 2, -99], [L + 3, -100], [L + 5, -92], [L - 6, -82.5], [tx + 14, tz - 25], [tx + 2, tz - 16], [tx + 2, tz - 2]]; // out to the hold at the link, and back
   AIRSIDE.vehicles.push({ g: taxi, path: new THREE.CatmullRomCurve3(tp.map(([x, z]) => new THREE.Vector3(x, 0, z)), true, 'centripetal'), speed: 5, phase: 0, t0: 13 });
   // two pilots walking out from the club to the line and back
-  for (const [i, pts] of [[0, [[-1488, -40], [-1478, -56], [-1471, -66], [-1462, -66], [-1470, -55], [-1484, -42]]], [1, [[-1500, -40], [-1508, -55], [-1515, -64], [-1522, -55], [-1506, -42]]]]) {
+  for (const [i, pts] of [[0, [[-230, -46], [-216, -50], [-205, -52], [-196, -50], [-208, -47.5], [-224, -44.5]]], [1, [[-242, -46], [-238, -50], [-228, -52], [-234, -49]]]]) {
     const p = person(0xf4f3ee); p.userData.dynamic = true; air.add(p);
     AIRSIDE.vehicles.push({ g: p, path: new THREE.CatmullRomCurve3(pts.map(([x, z]) => new THREE.Vector3(x, 0, z)), true), speed: 1.3, phase: 0, t0: i * 17 });
   }
@@ -4525,6 +4696,15 @@ async function exportLobbyForBake(to = 'http://127.0.0.1:5199/lobby_src') {
  *  with the lightmap; the live interior meshes and every interior point/spot light go, so no shader in the scene has
  *  to carry them (the biggest single cost at startup on integrated GPUs). Missing files: the live lobby stays. */
 const LOBBY_LM_MAX = 4; // the lightmap stores irradiance / LOBBY_LM_MAX, sRGB-encoded
+/** a copy of a geometry without the triangles whose centre (in world space, through mw) passes test(x, y, z) */
+function dropTriangles(geo, mw, test) {
+  const g0 = floatGeometry(geo.clone()), g = g0.index ? g0.toNonIndexed() : g0, p = g.attributes.position, // (plain float arrays: the baked file is quantized and interleaved)
+    keep = [], v = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let t = 0; t < p.count; t += 3) { c.set(0, 0, 0); for (let k = 0; k < 3; k++) c.add(v.fromBufferAttribute(p, t + k).applyMatrix4(mw)); c.multiplyScalar(1 / 3); if (!test(c.x, c.y, c.z)) keep.push(t); }
+  const out = new THREE.BufferGeometry();
+  for (const [name, a] of Object.entries(g.attributes)) { const arr = new a.array.constructor(keep.length * 3 * a.itemSize); keep.forEach((t, i) => { for (let k = 0; k < 3 * a.itemSize; k++) arr[i * 3 * a.itemSize + k] = a.array[t * a.itemSize + k]; }); out.setAttribute(name, new THREE.BufferAttribute(arr, a.itemSize, a.normalized)); }
+  return out;
+}
 async function loadBakedLobby() {
   let gl, lm;
   try {
@@ -4547,7 +4727,9 @@ async function loadBakedLobby() {
       map: src.map ?? null, color: src.color ? src.color.clone() : new THREE.Color(1, 1, 1), side: src.side, alphaTest: src.alphaTest || 0,
       lightMap: lm, lightMapIntensity: LOBBY_LM_MAX * 0.88, // a touch under the bake: the pale floor tiles otherwise read blown out
     })).get(key);
-    const mesh = new THREE.Mesh(n.geometry, mat);
+    let geo = n.geometry;
+    if (key === matSig(M.poster)) geo = dropTriangles(geo, n.matrixWorld, (x, y, z) => z < ROOM.z0 - 0.2); // the rooms' old runway print: Room B's wall is the mentor's board now
+    const mesh = new THREE.Mesh(geo, mat);
     n.matrixWorld.decompose(mesh.position, mesh.quaternion, mesh.scale);
     mesh.receiveShadow = false; mesh.castShadow = false;
     group.add(mesh); parts++;
@@ -4892,32 +5074,8 @@ function buildConnaught() {
   // lamps along both pavements and down the wings
   for (let x = -122; x <= 122; x += 17) { if (Math.abs(x) > 6) cpLamp(x, ROAD.z - ROAD.half - 0.7); cpLamp(x + 8.5, ROAD.z + ROAD.half + 0.7); }
   for (const sx of [-1, 1]) for (let z = -16; z <= 24; z += 13) cpLamp(sx * 27.4, z, false);
-  buildAvenue();
   glowPoints(CP_GLOW, 0xffd9a6, 1.2, scene);
   for (const [x, y, z] of CP_GLOW) lightPool(x, z, y > 4.2 ? 6 : 11, y > 4.2 ? 6 : 11, scene, y > 4.2 ? 0.35 : 0.22, y > 4.2 ? 0.32 : 0.02);
-}
-
-/** The avenue: from the city straight to the campus gate, down the gap in the street front, colonnades either side */
-function buildAvenue() {
-  const z0 = 59.4, z1 = 430, mid = (z0 + z1) / 2, L = z1 - z0; // from the paved apron across the road, south to the city
-  const road = panel(8, L, M.asphalt.clone(), 0, 0.006, mid, 'up'); road.material.map = repeatOf(M.asphalt.map, 2, L / 8); ASPHALT.push(road.material);
-  const dash = new THREE.MeshStandardMaterial({ color: 0xe8e4da, roughness: 0.8 });
-  for (let z = z0 + 6; z < z1 - 3; z += 9) panel(0.15, 3, dash, 0, 0.012, z, 'up', scene, { cast: false, receive: true });
-  const kerb = new THREE.MeshStandardMaterial({ color: 0xa6a195, roughness: 0.9 });
-  for (const sx of [-1, 1]) {
-    const pv = M.paving.clone(); pv.map = repeatOf(M.paving.map, 10 / 2.4, L / 2.4); PAVED.push(pv);
-    panel(10, L, pv, sx * 9, 0.011, mid, 'up');                       // a broad pavement each side, to the colonnades
-    box(0.22, 0.15, L, kerb, sx * 4.11, 0.075, mid);
-  }
-  // three blocks a side with cross streets between, so it reads as a city grid from the air
-  for (const [a, b] of FIELD === 'delhi' ? [[62, 160], [178, 296], [314, 428]] : []) {
-    cpBlock(-14, b, Math.PI / 2, b - a, 14);   // west side: the front faces the avenue (+x), running north
-    cpBlock(14, a, -Math.PI / 2, b - a, 14);   // east side: the front faces the avenue (-x), running south
-  }
-  for (let z = z0 + 10; z < z1 - 4; z += 16) {
-    cpLamp(-4.7, z, false); cpLamp(4.7, z + 8, false);
-    for (const sx of [-1, 1]) tree(sx * 9.6, z + (sx > 0 ? 4 : 12)); // maples down both pavements, staggered
-  }
 }
 
 /* ---------- The street outside the gate: pavements, median, autos, a bhel-puri cart ---------- */
@@ -4940,6 +5098,7 @@ function buildStreetStatic() {
     }
     for (let x = -130; x < 130; x += 1) {
       if (side < 0 && Math.abs(x + 0.5) < 2.6) continue; // the gate's dropped kerb
+      if (side > 0 && Math.abs(x + 0.5) < 4.8) continue; // and opposite, the mouth of the Academy Road
       box(1, 0.15, 0.22, (Math.floor(x) & 1) ? kerbY : kerbK, x + 0.5, 0.075, zk + side * 0.11);
     }
   }
@@ -5067,7 +5226,7 @@ function updateStreet(now) {
 // laid on the scene's, so the hotels, roads and parks stand where they really are relative to it.
 const AERO = { data: null, split: 0.4, route: null, routeLen: 0, pin: null, ready: false, names: [] };
 const AERIAL_KEYS = [ // aerial phase of the scroll, t 0..1: position, look target
-  [0, [1650, 980, 2050], [180, 0, 160]],
+  [0, [1425, 796, 1687], [145, 0, 105]],                  // the home screen opens here: the town, the expressway and the field
   [0.3, [1050, 520, 1150], [40, 0, -60]],
   [0.6, [260, 150, 470], [0, 6, 0]],
   [0.84, [0, 24, 165], [0, 5, 0]],
@@ -5084,7 +5243,7 @@ function aerialCamera(t, pos, look) {
   look.set(0, 4.6, 0);
 }
 async function fetchAerocity() {
-  const src = FIELD === 'delhi' ? 'data/aerocity.json?v=8' : 'data/airfield.json?v=1';
+  const src = FIELD === 'delhi' ? 'data/aerocity.json?v=8' : 'data/airfield.json?v=5';
   try { AERO.data = await (await fetch(src)).json(); } catch (e) { console.warn('aerocity', e); }
 }
 /** windows drawn per storey from world position: no UVs needed on thousands of extruded walls */
@@ -5304,6 +5463,7 @@ function buildAerocity() {
   D.roads.forEach((r, idx) => {
     const w = r[0], pts = [];
     for (let i = 1; i < r.length; i += 2) pts.push([r[i], r[i + 1]]);
+    if (D.highway && w === D.highway.w) { for (let i = 1; i < pts.length; i++) link(pts[i - 1], pts[i], w); if (D.names[idx]) AERO.names.push([pts, D.names[idx]]); return; } // drawn below
     let along = 0;
     for (let i = 0; i < pts.length; i++) {
       const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
@@ -5323,6 +5483,43 @@ function buildAerocity() {
   rg.setIndex(ri); rg.computeVertexNormals();
   const road = new THREE.Mesh(rg, groundMaterial('road', { roughness: 0.92, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }));
   road.receiveShadow = true; city.add(road);
+  if (D.highway) {                                                   // the expressway: its own surface, a concrete median barrier, twin-arm lamps
+    const q = []; for (let i = 0; i < D.highway.line.length; i += 2) q.push([D.highway.line[i], D.highway.line[i + 1]]);
+    // the surface, painted across: shoulder, three lanes (dashed), median, three lanes, shoulder; 16 px a metre
+    const W = 2 * (D.highway.off + D.highway.w / 2) + 2, PX = 16, TILE = 12;
+    const hwTex = canvasTex(W * PX, TILE * PX, (c, w, h) => {
+      const m = (v) => v * PX, cw = D.highway.w, c0 = 1, c1 = 1 + cw, c2 = W - 1 - cw, c3 = W - 1;
+      c.fillStyle = '#8e8b84'; c.fillRect(0, 0, w, h);                                                   // shoulders
+      c.fillStyle = '#3a3d43'; c.fillRect(m(c0), 0, m(cw), h); c.fillRect(m(c2), 0, m(cw), h);            // asphalt
+      c.fillStyle = '#5b6e43'; c.fillRect(m(c1), 0, m(c2 - c1), h);                                       // the median's grass
+      c.fillStyle = '#eceae2';
+      for (const x of [c0, c1 - 0.15, c2, c3 - 0.15]) c.fillRect(m(x), 0, m(0.15), h);                    // edge lines
+      for (const a0 of [c0, c2]) for (const k of [1, 2]) c.fillRect(m(a0 + cw * k / 3 - 0.07), 0, m(0.14), h / 2); // lane dashes
+    }, { repeat: [1, 1] });
+    hwTex.wrapT = THREE.RepeatWrapping; hwTex.anisotropy = MAX_ANISO;
+    const hp = [], huv = [], hi = []; let along = 0;
+    for (let i = 0; i < q.length; i++) {
+      const a = q[Math.max(0, i - 1)], b2 = q[Math.min(q.length - 1, i + 1)]; let tx = b2[0] - a[0], tz = b2[1] - a[1]; const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
+      if (i) along += Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1]);
+      hp.push(q[i][0] + tz * W / 2, 0.07, q[i][1] - tx * W / 2, q[i][0] - tz * W / 2, 0.07, q[i][1] + tx * W / 2);
+      huv.push(0, along / TILE, 1, along / TILE);
+      if (i) { const v = hp.length / 3 - 4; hi.push(v, v + 1, v + 2, v + 1, v + 3, v + 2); }
+    }
+    const hgeo = new THREE.BufferGeometry(); hgeo.setAttribute('position', new THREE.Float32BufferAttribute(hp, 3)); hgeo.setAttribute('uv', new THREE.Float32BufferAttribute(huv, 2)); hgeo.setIndex(hi); hgeo.computeVertexNormals();
+    const hwy = new THREE.Mesh(hgeo, new THREE.MeshStandardMaterial({ map: hwTex, roughness: 0.92, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }));
+    hwy.receiveShadow = true; city.add(hwy);
+    const hg = new THREE.Group(), no = { cast: false, receive: true }, conc = new THREE.MeshStandardMaterial({ color: 0xc9c4b8, roughness: 0.9 });
+    const pole = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.5, metalness: 0.5 }), lampM = new THREE.MeshStandardMaterial({ color: 0xf3f1e8, roughness: 0.4, emissive: 0xffe2a8, emissiveIntensity: 0.35 });
+    for (let i = 1; i < q.length; i++) {
+      const [ax, az] = q[i - 1], [bx, bz] = q[i], L = Math.hypot(bx - ax, bz - az), a = Math.atan2(bx - ax, bz - az), px = Math.cos(a), pz = -Math.sin(a);
+      if ((D.highway.gaps ?? []).some(([gx, gz]) => Math.hypot((ax + bx) / 2 - gx, (az + bz) / 2 - gz) < L / 2 + 12)) continue; // open where the bazaar crosses
+      box(0.6, 0.9, L + 0.2, conc, (ax + bx) / 2, 0.45, (az + bz) / 2, hg, no).rotation.y = a;
+      if (i % 2) continue;
+      cyl(0.12, 0.17, 11, pole, ax, 5.5, az, hg, 8, no); box(5.4, 0.16, 0.16, pole, ax, 10.95, az, hg, no).rotation.y = a;
+      for (const s of [-1, 1]) box(1.0, 0.2, 0.45, lampM, ax + px * s * 2.6, 10.82, az + pz * s * 2.6, hg, no).rotation.y = a;
+    }
+    city.add(bakeGroup(hg));
+  }
   // the campus street joins the city at both ends
   for (const sx of [-1, 1]) link([sx * 130, ROAD.z], [sx * 175, ROAD.z], 9);
   link([-130, ROAD.z], [0, ROAD.z], 9); link([0, ROAD.z], [130, ROAD.z], 9);
@@ -5340,7 +5537,11 @@ function buildAerocity() {
   }
   // trees: avenues along the bigger roads, and clumps in the parks
   const trees = [];
-  D.roads.forEach((r) => { const w = r[0]; if (w < 10) return;
+  if (D.highway) { const hl = D.highway.line, R0 = D.highway.off + D.highway.w / 2 + 5;
+    for (let i = 2; i < hl.length; i += 2) { const x0 = hl[i - 2], z0 = hl[i - 1], x1 = hl[i], z1 = hl[i + 1], L = Math.hypot(x1 - x0, z1 - z0); if (!L) continue;
+      const nx = -(z1 - z0) / L, nz = (x1 - x0) / L;
+      for (let s2 = 0; s2 < L; s2 += 18) for (const sd of [-1, 1]) if (rnd() < 0.7) trees.push([x0 + (x1 - x0) * s2 / L + sd * nx * R0, z0 + (z1 - z0) * s2 / L + sd * nz * R0]); } }
+  D.roads.forEach((r) => { const w = r[0]; if (w < 10 || (D.highway && w === D.highway.w)) return;
     for (let i = 3; i < r.length; i += 2) { const x0 = r[i - 2], z0 = r[i - 1], x1 = r[i], z1 = r[i + 1], L = Math.hypot(x1 - x0, z1 - z0); if (!L) continue;
       const nx = -(z1 - z0) / L, nz = (x1 - x0) / L;
       for (let s2 = 0; s2 < L; s2 += 15) for (const sd of [-1, 1]) if (rnd() < 0.8) trees.push([x0 + (x1 - x0) * s2 / L + sd * nx * (w / 2 + 3.5), z0 + (z1 - z0) * s2 / L + sd * nz * (w / 2 + 3.5)]); } });
@@ -5590,7 +5791,10 @@ function buildCountryLife(city, D) {
   const std = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.25 });
   const KINDS = {
     car: { geo: vehicleGeo([[4.3, 0.75, 1.78, 0, 0.72, 0, 1], [2.3, 0.62, 1.62, -0.3, 1.38, 0, 0.16], [0.08, 0.16, 0.5, 2.15, 0.82, 0.55, 2.5], [0.08, 0.16, 0.5, 2.15, 0.82, -0.55, 2.5]], { wheels: [[1.35, 0.82, 0.33], [1.35, -0.82, 0.33], [-1.35, 0.82, 0.33], [-1.35, -0.82, 0.33]] }),
-      colors: [0xf2f2f0, 0xb8bcc2, 0x2b2f38, 0xa31f24, 0x2f4f8a, 0xd8d2c0, 0x6d7177], speed: [13, 21], n: 60 },
+      colors: [0xf2f2f0, 0xb8bcc2, 0x2b2f38, 0xa31f24, 0x2f4f8a, 0xd8d2c0, 0x6d7177], speed: [13, 21], n: 100 },
+    // freight on the expressway: a cab and a box body
+    truck: { geo: vehicleGeo([[2.2, 2.3, 2.4, 3.6, 1.65, 0, 0.35], [8.2, 3.1, 2.5, -1.6, 2.15, 0, 1], [10.2, 0.35, 2.3, -0.4, 0.62, 0, 0.12]], { wheels: [[3.6, 1.1, 0.5], [3.6, -1.1, 0.5], [-2.6, 1.1, 0.5], [-2.6, -1.1, 0.5], [-4.0, 1.1, 0.5], [-4.0, -1.1, 0.5]], round: 0.08 }),
+      colors: [0xf2f2f0, 0x2f4f8a, 0xc9a227, 0xb3201b, 0x3c6e47], speed: [11, 15], n: 26 },
     bus: { geo: vehicleGeo([[11, 2.6, 2.5, 0, 1.75, 0, 1], [10.6, 0.9, 2.56, 0, 2.3, 0, 0.15], [0.1, 1.3, 2.2, 5.5, 2.0, 0, 0.15]], { wheels: [[3.8, 1.15, 0.5], [3.8, -1.15, 0.5], [-3.6, 1.15, 0.5], [-3.6, -1.15, 0.5]], round: 0.12 }),
       colors: [0xd23a2a, 0x2e7d4f, 0xe0b11c], speed: [11, 15], n: 6 },
     tractor: { geo: vehicleGeo([[2.6, 0.9, 1.1, 0.4, 1.15, 0, 1], [1.0, 1.1, 1.1, -0.7, 2.1, 0, 0.2], [3.4, 1.0, 2.0, -3.6, 1.0, 0, 0.75]],
@@ -5599,15 +5803,21 @@ function buildCountryLife(city, D) {
   // lanes: every road polyline long enough to drive, with its cumulative length
   const lanes = D.roads.map((r) => { const pts = []; for (let i = 1; i < r.length; i += 2) pts.push([r[i], r[i + 1]]);
     const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-    return { w: r[0], pts, cum, L: cum.at(-1) }; }).filter((l) => l.L > 150);
+    const lane = { w: r[0], pts, cum, L: cum.at(-1) };
+    // the expressway's carriageways are one-way: traffic keeps left, so eastbound runs on the northern one
+    if (D.highway && r[0] === D.highway.w) { const k = Math.min(pts.length - 1, 5); lane.oneway = pts[k][1] < D.highway.line[k * 2 + 1] ? 1 : -1; }
+    return lane; }).filter((l) => l.L > 150);
   const main = lanes.filter((l) => l.w >= 8), minor = lanes.filter((l) => l.w < 8);
+  const byLength = (pool) => { let r = rnd() * pool.reduce((a, l) => a + l.L, 0); for (const l of pool) if ((r -= l.L) <= 0) return l; return pool[0]; }; // busier where there's more road
   for (const [kind, K] of Object.entries(KINDS)) {
     if (LITE) K.n = Math.ceil(K.n / 2);
     const im = new THREE.InstancedMesh(K.geo, std, K.n); im.userData.dynamic = true; im.userData.noCast = true; im.frustumCulled = false;
     for (let i = 0; i < K.n; i++) {
-      const pool = kind === 'tractor' ? minor : kind === 'bus' ? main : (rnd() < 0.6 ? main : lanes), lane = pool[(rnd() * pool.length) | 0];
+      const pool = kind === 'tractor' ? minor : kind === 'bus' || kind === 'truck' ? main : (rnd() < 0.6 ? main : lanes), lane = kind === 'tractor' ? pool[(rnd() * pool.length) | 0] : byLength(pool);
       im.setColorAt(i, col.setHex(K.colors[(rnd() * K.colors.length) | 0]).multiplyScalar(0.85 + rnd() * 0.2));
-      COUNTRY.vehicles.push({ im, i, lane, s: rnd() * lane.L, dir: rnd() < 0.5 ? 1 : -1, v: K.speed[0] + rnd() * (K.speed[1] - K.speed[0]) });
+      const v0 = K.speed[0] + rnd() * (K.speed[1] - K.speed[0]);
+      COUNTRY.vehicles.push({ im, i, lane, s: rnd() * lane.L, dir: lane.oneway ?? (rnd() < 0.5 ? 1 : -1), v: lane.oneway ? v0 * 1.5 : v0,
+        lo: lane.oneway ? [-3.4, 0, 3.4][(rnd() * 3) | 0] : null });      // on the expressway: one of three lanes
     }
     city.add(im);
   }
@@ -5872,11 +6082,12 @@ function updateCountryLife(now, dt) {
   for (const v of COUNTRY.vehicles) {
     const l = v.lane;
     v.s += v.dir * v.v * dts;
-    if (v.s > l.L) { v.s = l.L; v.dir = -1; } else if (v.s < 0) { v.s = 0; v.dir = 1; }  // the end of the road: turn round
+    if (l.oneway) { if (v.s > l.L) v.s -= l.L; else if (v.s < 0) v.s += l.L; }           // the expressway runs on past the haze
+    else if (v.s > l.L) { v.s = l.L; v.dir = -1; } else if (v.s < 0) { v.s = 0; v.dir = 1; }  // the end of the road: turn round
     let i = 1; while (i < l.cum.length - 1 && l.cum[i] < v.s) i++;
     const [x0, z0] = l.pts[i - 1], [x1, z1] = l.pts[i], seg = (l.cum[i] - l.cum[i - 1]) || 1, u = (v.s - l.cum[i - 1]) / seg;
     let dx = (x1 - x0) / seg * v.dir, dz = (z1 - z0) / seg * v.dir;
-    const off = l.w / 4;                                                                  // keep left
+    const off = v.lo ?? l.w / 4;                                                          // keep left (or the vehicle's own lane)
     _cq.position.set(x0 + (x1 - x0) * u + dz * off, 0.06, z0 + (z1 - z0) * u - dx * off);
     _cq.rotation.set(0, Math.atan2(-dz, dx), 0); _cq.scale.setScalar(1); _cq.updateMatrix();
     v.im.setMatrixAt(v.i, _cq.matrix); touched.add(v.im);
@@ -6140,13 +6351,24 @@ const COURSES = {
   A: {
     eyebrow: 'Room A', title: 'Cadet Prep', side: 'right',
     lede: 'A dedicated pathway for airline cadet-pilot programme applicants, kept separate from the general DGCA question bank.',
-    points: ['Aptitude, reasoning, numerical and verbal practice', 'Interview preparation and group-discussion guidance', 'Practice material for each selection stage', 'Programme updates with dates and sources'],
+    points: ['Aptitude, reasoning, numerical and verbal practice', 'Mock group discussions and interview panels', 'Practice material for each selection stage', 'Programme updates with dates and sources'],
+    extra: `<h3>Your path to the right seat</h3><ol class="path">
+      <li><strong>Class 12 with Physics and Maths</strong>The academic requirement for a DGCA pilot licence</li>
+      <li><strong>DGCA medical</strong>Class 2 to start, Class 1 before the licence</li>
+      <li><strong>DGCA ground exams</strong>Navigation, meteorology, regulations, technical papers and RTR</li>
+      <li><strong>Flight training</strong>200 hours at a flight training organisation</li>
+      <li><strong>Commercial Pilot Licence</strong>Then a type rating on an airliner such as the A320 or B737</li>
+      <li><strong>First Officer</strong>The right seat</li></ol>
+      <p class="path__note">Or apply to an airline cadet programme: selection first (aptitude, assessment, group discussion, interview, medical), then training on the airline’s pathway. Requirements vary: always check the airline’s and DGCA’s current rules.</p>`,
     via: [[-1.2, 1.62, -12.2], [-1.65, 1.62, -13.7], [-1.9, 1.62, -14.7]], pos: [-2.75, 1.62, -15.5], look: [-4.2, 1.45, -22.2],
   },
   B: {
     eyebrow: 'Room B', title: '1-on-1 Mentorship', side: 'left', engine: true,
     lede: 'Book time with a mentor for career guidance, subject doubts or a full mentorship programme, without long message threads.',
     points: ['General career and flight-training guidance', 'Subject-specific doubt-clearing sessions', 'Self-study mentorship with recorded classes', 'Pick an open slot, then confirm your booking'],
+    extra: `<h3>Your mentor</h3><div class="mentor"><img src="brand/founder.webp" alt="Capt. Choudhary Sourabh" loading="lazy">
+      <div><strong>Capt. Choudhary Sourabh “Flyboy”</strong><span>CEO &amp; Founder · Boeing 737 type-rated pilot · First Officer (NSOP)</span></div></div>
+      <p class="mentor__quote">“You don’t need to be born into aviation to build a future in aviation. You need the right mindset, the courage to begin, the discipline to continue and the awareness to make the right decisions.”</p>`,
     via: [[1.2, 1.62, -12.2], [1.65, 1.62, -13.7], [1.9, 1.62, -14.7]], pos: [2.7, 1.62, -15.4], look: [4.7, 1.2, -19.9],
   },
   // Door C follows the brief's flight-training discovery section (9).
@@ -6165,7 +6387,7 @@ const COURSES = {
       { label: 'Down the runway', pos: [720, 75, -175], look: [-260, 0, -250] },
       { label: 'Final approach', pos: [1290, 46, -262], look: [560, 10, -322] },
       { label: 'Hangar row', pos: [-330, 26, -200], look: [-610, 9, -55] },
-      ...(FIELD !== 'delhi' ? [{ label: 'Control tower', pos: [-812, 33.6, -44], look: [-620, 0, -470] }, { label: 'Flying club', pos: [-1478, 6.4, -40], look: [-1380, 1, -150] },
+      ...(FIELD !== 'delhi' ? [{ label: 'Control tower', pos: [-812, 33.6, -44], look: [-620, 0, -470] }, { label: 'Flying club', pos: [-232, 6.6, -45], look: [-80, 1, -84] },
         { label: 'Ride a trainer', follow: 'trainer' }, { label: 'Ride the train', follow: 'train' }, { label: "Cadet's first flight", follow: 'cadet' }] : []),
     ],
     doorLook: [0, 1.6, -40], split: 0.5, dur: 16,
@@ -6239,77 +6461,116 @@ function enterRoom(id) {
   html.classList.add('in-room');
   const startLook = lastWalk.look.clone();
   activeRoom = id;
+  const dive = SCREEN_SPOTS[id] && (id === 'A' || id === 'B') ? beginDive(id) : null; // Rooms A and B: through the room and into its screen
   const doorLook = c.doorLook ? new THREE.Vector3(...c.doorLook) : new THREE.Vector3(DOOR_X[id], 1.45, -16);
   const split = c.flight ? 0.25 : c.split ?? 0.5;
   const endLook = new THREE.Vector3(...c.look);
   const walkPts = [lastWalk.pos.clone(), ...c.via.map((v) => new THREE.Vector3(...v))];
-  const curve = new THREE.CatmullRomCurve3([...walkPts, ...(c.flight ?? []).map((v) => new THREE.Vector3(...v)), new THREE.Vector3(...c.pos)], false, 'centripetal');
+  const curve = new THREE.CatmullRomCurve3([...walkPts, ...(c.flight ?? []).map((v) => new THREE.Vector3(...v)), new THREE.Vector3(...c.pos), ...(dive ? dive.path : [])], false, 'centripetal');
   // a long flight after the walk: the walk keeps a quarter of the time, the flight gets the rest
   const fw = c.flight ? new THREE.CatmullRomCurve3(walkPts, false, 'centripetal').getLength() / curve.getLength() : 0;
-  const along = (t) => (!c.flight ? t : t < split ? fw * (t / split) : fw + (1 - fw) * ((t - split) / (1 - split)));
+  // walk then flight: the camera's speed follows its height (a stroll at eye level, quicker up the stair, a fast
+  // cruise once it's high), so it gathers pace smoothly as it climbs and lifts off; short ease-in and ease-out ramps
+  const along = c.flight ? heightWarp(curve) : (t) => t;
   const st = { t: 0 };
   const apply = () => {
     curve.getPointAt(Math.min(1, along(st.t)), roomCam.pos);
-    const a = smooth(clamp01(st.t / split)), b = smooth(clamp01((st.t - split) / (1 - split)));
-    roomCam.look.lerpVectors(startLook, doorLook, a).lerp(endLook, b);
+    const u = along(st.t), a = c.flight ? smooth(clamp01(u / fw)) : smooth(clamp01(st.t / split));
+    const b = c.flight ? smooth(clamp01((u - fw) / (1 - fw) * 1.1)) : smooth(clamp01((st.t - split) / (1 - split) * (dive ? 1.35 : 1)));
+    roomCam.look.lerpVectors(startLook, doorLook, a).lerp(dive ? dive.toLook : endLook, b);
+    if (dive && st.t > split) trackLive();
   };
   apply();
   roomTl = gsap.timeline({
-    onComplete: () => { mode = 'room'; showCard(id); },
-    onReverseComplete: () => { mode = 'walk'; roomTl = null; activeRoom = null; html.classList.remove('in-room'); lenis?.start(); },
+    onComplete: () => { mode = 'room'; if (dive) pageOpened(); else showCard(id); },
+    onReverseComplete: () => { mode = 'walk'; roomTl = null; activeRoom = null; html.classList.remove('in-room'); lenis?.start(); if (dive) resetDive(); },
   });
   roomTl.to(DOORS[id], { open: 1, duration: 1.2, ease: 'power2.inOut' }, 0)
-    .to(st, { t: 1, duration: reduceMotion ? 0.3 : c.dur ?? 3.4, ease: 'power2.inOut', onUpdate: apply }, 0.35);
+    .to(st, { t: 1, duration: reduceMotion ? 0.3 : (c.dur ?? 3.4) + (dive ? 1.6 : 0), ease: c.flight ? 'none' : 'power2.inOut', onUpdate: apply }, 0.35); // a flight's warp eases itself
+  if (dive) DIVE.tl = roomTl;
+}
+/** time (0..1) to distance along a path (0..1) for a camera whose speed goes with its height above the ground,
+ *  eased in over the first 10% and settling over the last 24% */
+function heightWarp(curve, N = 600) {
+  const tau = new Float32Array(N + 1), pt = new THREE.Vector3();
+  for (let i = 1; i <= N; i++) { curve.getPointAt((i - 0.5) / N, pt); tau[i] = tau[i - 1] + 1 / (Math.max(0, pt.y) + 3); }
+  for (let i = 1; i <= N; i++) tau[i] /= tau[N];
+  const env = (t) => smooth(clamp01(t / 0.1)) * smooth(clamp01((1 - t) / 0.24)), E = new Float32Array(N + 1); // a long, soft arrival
+  for (let i = 1; i <= N; i++) E[i] = E[i - 1] + env((i - 0.5) / N); for (let i = 1; i <= N; i++) E[i] /= E[N];
+  const inv = (arr, v) => { let lo = 0, hi = N; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (arr[m] < v) lo = m; else hi = m; } return (lo + (v - arr[lo]) / ((arr[hi] - arr[lo]) || 1)) / N; };
+  const look = (arr, x) => { const f = clamp01(x) * N, i = Math.min(N - 1, Math.floor(f)); return arr[i] + (arr[i + 1] - arr[i]) * (f - i); };
+  return (t) => inv(tau, look(E, t));
 }
 /** fly between the airside viewpoints: up and over in an arc, then settle with the new view */
 const VIEW = { at: 0, tween: null };
-function flyTo(pos, look, dur = 3.2) {
+/** the camera's own velocity (m/s), measured frame to frame wherever roomCam is being driven from, so a new move
+ *  can set off at the speed the last one was going */
+const CAMV = { v: new THREE.Vector3(), prev: new THREE.Vector3(), stamp: -1e9 };
+const _cvi = new THREE.Vector3();
+function camVelocity(now, dt) {
+  if (now - CAMV.stamp < 250 && dt > 0) { _cvi.subVectors(roomCam.pos, CAMV.prev).divideScalar(dt / 1000); if (_cvi.length() > 2500) _cvi.set(0, 0, 0); CAMV.v.lerp(_cvi, 0.5); }
+  else CAMV.v.set(0, 0, 0);
+  CAMV.prev.copy(roomCam.pos); CAMV.stamp = now;
+}
+const smoother = (t) => t * t * t * (t * (6 * t - 15) + 10);
+/** Fly between viewpoints like a camera drone: it climbs on a long hop (the ground slides by slowly from up there)
+ *  and comes down onto the new view; pan and tilt turn evenly as angles (the horizon stays level) and settle before
+ *  it arrives; and it sets off at the speed the camera already had, so a hop cut short by another flows on */
+function flyTo(pos, look) {
   return new Promise((done) => {
-    const p0 = roomCam.pos.clone(), l0 = roomCam.look.clone(), p1 = new THREE.Vector3(...pos), l1 = new THREE.Vector3(...look);
-    const lift = Math.min(160, p0.distanceTo(p1) * 0.18), st = { t: 0 };
+    const p0 = roomCam.pos.clone(), p1 = new THREE.Vector3(...pos), l1 = new THREE.Vector3(...look);
+    const D = p0.distanceTo(p1), dur = reduceMotion ? 0.3 : THREE.MathUtils.clamp(2 + Math.log(1 + D / 60), 2, 7);
+    const H = Math.min(420, D * 0.28), v0 = reduceMotion ? new THREE.Vector3() : CAMV.v.clone();
+    const d0 = roomCam.look.clone().sub(p0), d1 = l1.clone().sub(p1), L0 = d0.length(), L1 = d1.length();
+    const yaw0 = Math.atan2(d0.x, d0.z), pit0 = Math.atan2(d0.y, Math.hypot(d0.x, d0.z));
+    const yaw1 = Math.atan2(d1.x, d1.z), pit1 = Math.atan2(d1.y, Math.hypot(d1.x, d1.z));
+    const dyaw = Math.atan2(Math.sin(yaw1 - yaw0), Math.cos(yaw1 - yaw0)), dip = 0.1 * (H / 420), st = { t: 0 };
     VIEW.tween?.kill();
-    VIEW.tween = gsap.to(st, { t: 1, duration: reduceMotion ? 0.3 : dur, ease: 'power2.inOut', onComplete: done, onUpdate: () => {
-      roomCam.pos.lerpVectors(p0, p1, st.t); roomCam.pos.y += Math.sin(Math.PI * st.t) * lift;
-      roomCam.look.lerpVectors(l0, l1, smooth(clamp01(st.t * 1.25)));
+    VIEW.tween = gsap.to(st, { t: 1, duration: dur, ease: 'none', onComplete: done, onUpdate: () => {
+      const t = st.t, s = Math.sin(Math.PI * t);
+      roomCam.pos.lerpVectors(p0, p1, smoother(t)).addScaledVector(v0, dur * t * (1 - t) * (1 - t)); // the old speed fades out over the hop
+      roomCam.pos.y += H * s * s;
+      const e = smoother(clamp01(t / 0.85)), yaw = yaw0 + dyaw * e, pit = pit0 + (pit1 - pit0) * e - dip * s * s, L = L0 + (L1 - L0) * e;
+      roomCam.look.set(Math.sin(yaw) * Math.cos(pit), Math.sin(pit), Math.cos(yaw) * Math.cos(pit)).multiplyScalar(L).add(roomCam.pos);
     } });
   });
 }
 function goToView(c, i) {
   if (mode !== 'room' || i === VIEW.at) return;
   VIEW.at = i;
-  card.querySelectorAll('[data-f="views"] button').forEach((b, k) => b.setAttribute('aria-pressed', String(k === i)));
+  card.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.view === i)));
   const v = c.views[i];
   if (v.follow !== 'cadet') endCadet(false);
-  FOLLOW.kind = v.follow ?? null; FOLLOW.k = 0;
+  FOLLOW.kind = v.follow ?? null; FOLLOW.k = 0; FOLLOW.pv.copy(CAMV.v); FOLLOW.lv.set(0, 0, 0);
   if (v.follow === 'cadet') startCadet();
   if (v.follow) { VIEW.tween?.kill(); setCardCollapsed(true); return; }
-  flyTo(v.pos, v.look, 2.4 + roomCam.pos.distanceTo(new THREE.Vector3(...v.pos)) / 900);
+  flyTo(v.pos, v.look);
 }
 /* ---------- A cadet's first flight: one trainer from briefing to debrief, captioned stage by stage ----------
    The route is sampled like the circuits (0.25 s, heading h, pitch p, bank r): the walk-round on the GA apron, taxi
-   along K to J1, the run-up at the hold, line up on 10 and take off eastbound, a left-hand circuit north of the field
-   at 200 m, a full-stop landing, vacate at J2 and taxi back to the line. Long legs play faster. While it runs the
+   along K to J1, the run-up at the hold, line up on 28 and take off westbound with the rest of the traffic, a right-hand circuit north of the field
+   at 200 m, a full-stop landing, vacate at J4 and taxi back to the line. Long legs play faster. While it runs the
    lesson holds the runway: the airliners hold short and wait to start their approaches, the circuit trainers go
    around. */
 const CADET = { on: false, t: 0, plane: null, taxi: null, route: null, stage: -1, ui: null };
 const CADET_STAGES = {
   brief: ['Briefing', 'At the flying club your instructor goes through the weather, the circuit you will fly and the radio calls.'],
-  walk: ['Walk-round', 'Fuel and oil, tyres, control surfaces, the pitot tube: every check before you climb in.'],
-  taxi: ['Taxi', 'Cleared to taxi to holding point J1. Keep the nose wheel on the yellow line.'],
+  walk: ['Walk-round', 'Chocks and tie-downs off. Fuel and oil, tyres, control surfaces, the pitot cover: every check before you climb in.'],
+  taxi: ['Taxi', 'Off the school’s ramp and across K to holding point J3. Keep the nose wheel on the yellow line.'],
   hold: ['Run-up at the hold', 'Engine run-up and magneto checks, then the call: “Ready for departure.”'],
-  takeoff: ['Take-off, runway 10', 'Full power, keep her straight with rudder, rotate at 55 knots.'],
-  upwind: ['Climb out', 'Climb straight ahead, wings level, at 70 knots.'],
-  crosswind: ['Crosswind', 'Turn left and keep climbing to circuit height.'],
-  downwind: ['Downwind', '“Downwind, full stop.” Before-landing checks, and keep the runway off your left wing.'],
+  takeoff: ['Take-off, runway 28', 'An intersection departure from J3, the same way the airliners go: full power, keep her straight with rudder, rotate at 55 knots.'],
+  upwind: ['Climb out', 'Climb straight ahead, wings level, at 70 knots, out to the west.'],
+  crosswind: ['Crosswind', 'Turn right, it’s a right-hand circuit here, and keep climbing to circuit height.'],
+  downwind: ['Downwind', '“Downwind, full stop.” Before-landing checks, and keep the runway off your right wing.'],
   base: ['Base', 'Power back, first stage of flap, start the descent.'],
   final: ['Final approach', 'Line up with the centreline and aim for the numbers at 65 knots.'],
   landing: ['Touchdown', 'Flare, hold off, let the main wheels settle, then brakes.'],
-  taxiIn: ['Vacate and taxi in', 'Off the runway at J2, after-landing checks, taxi back to the line.'],
+  taxiIn: ['Vacate and taxi in', 'Off the runway at J4, along K, after-landing checks, taxi back to the school’s ramp.'],
   debrief: ['Debrief', 'That was your first circuit. Every pilot’s journey starts right here.'],
 };
 function buildCadetRoute() {
   const dt = 0.25, S = [], marks = [], wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-  let x = -1449, z = -68, y = 0, h = Math.PI / 2, v = 0, p = 0, r = 0, t = 0;
+  let x = RAMP.cadetX, z = RAMP.z, y = 0, h = Math.PI / 2, v = 0, p = 0, r = 0, t = 0;
   const rec = () => { S.push({ t, x, y, z, h, p, r }); t += dt; };
   const fwd = () => { x += Math.cos(h) * v * dt; z -= Math.sin(h) * v * dt; };
   const stage = (k, rate = 1) => marks.push({ k, t, rate });
@@ -6319,42 +6580,53 @@ function buildCadetRoute() {
   stage('brief'); wait(9);
   stage('walk'); wait(11);
   stage('taxi', 2); v = 8;
-  while (z > -104) { rec(); fwd(); }
-  turn(Math.PI / 2, 14);                                   // left onto K, westbound
-  while (x > -1646) { rec(); fwd(); }
-  turn(-Math.PI / 2, 14);                                  // right onto J1, north
+  while (z > RAMP.lane + 6) { rec(); fwd(); }
+  turn(Math.PI / 2, 6);                                    // left onto the ramp's lane, westbound
+  while (x > RAMP.links[0] + 6) { rec(); fwd(); }
+  turn(-Math.PI / 2, 6);                                   // right into the link, north: across K and up J3
+  x = RAMP.links[0];
   while (z > -228) { rec(); fwd(); }
   stage('hold'); v = 0; wait(8);
   v = 5; while (z > -312) { rec(); fwd(); }
-  turn(-Math.PI / 2, 10);                                  // right onto runway 10, eastbound
-  z = RWY_Z; h = 0; v = 0; wait(2);
+  turn(Math.PI / 2, 10);                                   // left onto runway 28 at J3: an intersection departure, westbound like everyone else
+  z = RWY_Z; h = Math.PI; v = 0; wait(2);
   stage('takeoff');
   while (v < 31) { rec(); fwd(); v += 2.6 * dt; }
   stage('upwind');
-  while (x < -100) { p = Math.min(0.15, p + 0.06 * dt); rec(); fwd(); y = Math.min(200, y + 5 * dt); v = Math.min(36, v + 0.4 * dt); }
+  while (x > -1000) { p = Math.min(0.15, p + 0.06 * dt); rec(); fwd(); y = Math.min(200, y + 5 * dt); v = Math.min(36, v + 0.4 * dt); }
   stage('crosswind', 2); v = 42; p = 0.04;
-  turn(Math.PI / 2, 260, 1.5, 0.4);                        // left, north
-  while (z > RWY_Z - 780) { rec(); fwd(); y = Math.min(200, y + 2 * dt); }
+  turn(-Math.PI / 2, 260, 1.5, 0.4);                       // right, north: the field's circuit is right-hand on 28
+  while (z > RWY_Z - 700) { rec(); fwd(); y = Math.min(200, y + 2 * dt); }
   stage('downwind', 2.2); p = 0;
-  turn(Math.PI / 2, 260, 0, 0.4); y = 200;                 // left, westbound
-  while (x > -2550) { rec(); fwd(); }
+  turn(-Math.PI / 2, 260, 0, 0.4); y = 200;                // right, eastbound
+  while (x < RWY_THR + 640) { rec(); fwd(); }
   stage('base', 1.6); p = -0.03;
-  turn(Math.PI / 2, 260, -1.6, 0.4);                       // left, south, descending
+  turn(-Math.PI / 2, 260, -1.6, 0.4);                      // right, south, descending
   while (z < RWY_Z - 270) { rec(); fwd(); y -= 1.6 * dt; }
-  stage('final'); turn(Math.PI / 2, 270, -1.6, 0.4);       // left onto final, eastbound
-  z = RWY_Z; h = 0; v = 32;
-  const TD = -1520, x0 = x, y0 = y;
-  while (x < TD) { y = y0 * (TD - x) / (TD - x0); p = -0.03 + 0.08 * (1 - Math.min(1, (TD - x) / 60)); rec(); fwd(); }
+  stage('final'); turn(-Math.PI / 2, 270, -1.6, 0.4);      // right onto final, westbound
+  z = RWY_Z; h = Math.PI; v = 32;
+  const TD = RWY_THR - 240, x0 = x, y0 = y;
+  while (x > TD) { y = y0 * (x - TD) / (x0 - TD); p = -0.03 + 0.08 * (1 - Math.min(1, (x - TD) / 60)); rec(); fwd(); }
   y = 0; stage('landing');
-  while (v > 9) { p = Math.max(0, p - 0.03 * dt); rec(); fwd(); v -= 2.2 * dt; }
+  while (v > 9) { p = Math.max(0, p - 0.03 * dt); rec(); fwd(); v -= 2.6 * dt; }
   stage('taxiIn', 2.5); p = 0; v = 9;
-  while (x < -655) { rec(); fwd(); }
-  turn(-Math.PI / 2, 15);                                  // right onto J2, south
-  while (z < -132) { rec(); fwd(); }
-  turn(-Math.PI / 2, 14);                                  // right onto K, westbound
-  while (x > -1435) { rec(); fwd(); }
-  turn(Math.PI / 2, 14);                                   // left into the apron, south
-  while (z < -68) { rec(); fwd(); }
+  const J4 = 300;
+  while (x > J4 + 15) { rec(); fwd(); }
+  turn(Math.PI / 2, 15);                                   // left off at J4, south
+  x = J4;
+  while (z < TWY_Z - 12) { rec(); fwd(); }
+  turn(-Math.PI / 2, 12);                                  // right onto K, westbound
+  z = TWY_Z;
+  while (x > RAMP.links[1] + 6) { rec(); fwd(); }
+  turn(Math.PI / 2, 6);                                    // left into the ramp's east link, south
+  x = RAMP.links[1];
+  while (z < RAMP.lane - 6) { rec(); fwd(); }
+  turn(-Math.PI / 2, 6);                                   // right onto the lane, westbound
+  z = RAMP.lane;
+  while (x > RAMP.cadetX + 6) { rec(); fwd(); }
+  turn(Math.PI / 2, 6);                                    // left onto the spot, south
+  x = RAMP.cadetX;
+  while (z < RAMP.z) { rec(); fwd(); }
   v = 0; stage('debrief'); wait(9);
   return { S, dt, T: t, marks };
 }
@@ -6396,42 +6668,57 @@ function stepCadet(t) {
   const g = CADET.plane; g.position.set(CADET.s.x, CADET.s.y, CADET.s.z); g.rotation.set(CADET.s.r ?? 0, CADET.s.h, CADET.s.p);
 }
 const _cq2 = new THREE.Vector3();
+/** a critically damped spring toward a moving target (Unity's SmoothDamp): position and speed both continuous, so
+ *  a camera eases off, keeps up, and changes shot without a jerk; smoothTime is roughly the time to arrive */
+const _sd1 = new THREE.Vector3(), _sd2 = new THREE.Vector3();
+function damp3(cur, vel, target, smoothTime, dt) {
+  const w = 2 / Math.max(0.02, smoothTime), x = w * dt, k = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  _sd1.subVectors(cur, target); _sd2.copy(vel).addScaledVector(_sd1, w).multiplyScalar(dt);
+  vel.addScaledVector(_sd2, -w).multiplyScalar(k);
+  cur.copy(target).add(_sd1.add(_sd2).multiplyScalar(k));
+}
+/** a chase camera's spring: quick when close, slower for a long change of shot, so a cut becomes a glide */
+const chaseTime = (base, from, to) => base + Math.min(1.3, from.distanceTo(to) / 700);
 function cadetCamera(dt) {
   if (!CADET.on) return;
-  const g = CADET.plane, key = CADET.route.marks[Math.max(0, CADET.stage)]?.k, fixed = ['brief', 'debrief', 'walk', 'hold', 'landing'].includes(key), e = 1 - Math.exp(-Math.min(dt, 100) / 1000 * (fixed ? 2.5 : 7)); // a chase keeps up
+  const g = CADET.plane, key = CADET.route.marks[Math.max(0, CADET.stage)]?.k, fixed = ['brief', 'debrief', 'walk', 'hold', 'landing'].includes(key), base = fixed ? 0.45 : 0.15; // a chase keeps up
   g.getWorldPosition(_fp); _ff.set(Math.cos(CADET.s?.h ?? 0), 0, -Math.sin(CADET.s?.h ?? 0));
-  if (key === 'brief' || key === 'debrief') { _fl.set(-1478, 6.4, -40); _cq2.copy(_fp).setY(1.5); }
+  if (key === 'brief' || key === 'debrief') { _fl.set(RAMP.cadetX + 14, 4.5, RAMP.z + 14); _cq2.copy(_fp).setY(1.5); }
   else if (key === 'walk') { const a = performance.now() / 4000; _fl.set(_fp.x + Math.cos(a) * 9, 2.3, _fp.z + Math.sin(a) * 9); _cq2.copy(_fp).setY(1.2); }
   else if (key === 'hold') { _fl.copy(_fp).add(new THREE.Vector3(_ff.z, 0, -_ff.x).multiplyScalar(-11)).addScaledVector(_ff, 6); _fl.y = 2.4; _cq2.copy(_fp).setY(1.2); }
-  else if (key === 'landing') { _fl.set(-1380, 5, RWY_Z + 34); _cq2.copy(_fp).setY(_fp.y + 1); }
+  else if (key === 'landing') { _fl.set(RWY_THR - 380, 5, RWY_Z + 34); _cq2.copy(_fp).setY(_fp.y + 1); }
   else { const air = _fp.y > 3, back = air ? 16 : 13; _fl.copy(_fp).addScaledVector(_ff, -back); _fl.y = _fp.y + (air ? 4 : 3.2); _cq2.copy(_fp).addScaledVector(_ff, 30); _cq2.y = _fp.y + (air ? 0 : 1); }
-  roomCam.pos.lerp(_fl, e); roomCam.look.lerp(_cq2, e);
+  const s = Math.min(dt, 100) / 1000;
+  damp3(roomCam.pos, FOLLOW.pv, _fl, chaseTime(base, roomCam.pos, _fl), s); damp3(roomCam.look, FOLLOW.lv, _cq2, chaseTime(base, roomCam.look, _cq2), s);
 }
 /** Ride-along: a chase camera behind one of the circuit trainers (the one furthest from its touchdown, so the ride
  *  starts in the air), or alongside the train; it eases in from wherever the camera was */
-const FOLLOW = { kind: null, k: 0, who: null };
+const FOLLOW = { kind: null, k: 0, who: null, pv: new THREE.Vector3(), lv: new THREE.Vector3() }; // pv, lv: the springs' speeds
 const _fp = new THREE.Vector3(), _ff = new THREE.Vector3(), _fl = new THREE.Vector3(), _fo = new THREE.Object3D();
 function updateFollow(dt) {
   if (FOLLOW.kind === 'cadet') return cadetCamera(dt);
-  const e = 1 - Math.exp(-Math.min(dt, 100) / 1000 * (FOLLOW.k < 1 ? 1.2 : 4)); FOLLOW.k = Math.min(1, FOLLOW.k + Math.min(dt, 100) / 2500);
+  const s = Math.min(dt, 100) / 1000; FOLLOW.k = Math.min(1, FOLLOW.k + s / 2.5);
+  const base = 0.25 + 0.9 * (1 - smooth(FOLLOW.k));                   // eases in from wherever it was, then keeps up
+  const go = (pos, look) => { damp3(roomCam.pos, FOLLOW.pv, pos, chaseTime(base, roomCam.pos, pos), s); damp3(roomCam.look, FOLLOW.lv, look, chaseTime(base, roomCam.look, look), s); };
   if (FOLLOW.kind === 'trainer') {
     if (!FOLLOW.who || !AIRSIDE.circuits.includes(FOLLOW.who)) FOLLOW.who = AIRSIDE.circuits.reduce((a, c2) => (c2.g.position.y > (a?.g.position.y ?? -1) ? c2 : a), null);
     const g = FOLLOW.who?.g; if (!g) return;
     g.getWorldPosition(_fp); _ff.set(1, 0, 0).applyQuaternion(g.quaternion); _ff.y *= 0.3; _ff.normalize();
     _fl.copy(_fp).addScaledVector(_ff, -15); _fl.y += 3.8;
-    roomCam.pos.lerp(_fl, e); roomCam.look.lerp(_fl.copy(_fp).addScaledVector(_ff, 40), e);
+    _cq2.copy(_fp).addScaledVector(_ff, 40); go(_fl, _cq2);
   } else if (FOLLOW.kind === 'train' && RAIL.train) {
     railAt(RAIL.s, _fo); _fp.copy(_fo.position); _ff.set(Math.cos(_fo.rotation.y), 0, -Math.sin(_fo.rotation.y)).multiplyScalar(RAIL.dir);
     _fl.copy(_fp).addScaledVector(_ff, -40).add(new THREE.Vector3(_ff.z, 0, -_ff.x).multiplyScalar(45)); _fl.y += 22;
-    roomCam.pos.lerp(_fl, e); roomCam.look.lerp(_fl.copy(_fp).addScaledVector(_ff, -70).setY(3), e);
+    _cq2.copy(_fp).addScaledVector(_ff, -70).setY(3); go(_fl, _cq2);
   }
 }
 async function leaveRoom() {
   if ((mode !== 'room' && mode !== 'screen') || !roomTl) return;
+  if (DIVE.room) return closePage();                               // a screen room: back out the way it came
   FOLLOW.kind = null; hideTip(); endCadet(false);
   // from another viewpoint, fly back to where the door's flight ended, then reverse it home
   const c = COURSES[activeRoom];
-  if (mode === 'room' && c?.views && VIEW.at !== 0) { hideCard(); mode = 'moving'; VIEW.at = 0; await flyTo(c.pos, c.look, 2.6); mode = 'room'; }
+  if (mode === 'room' && c?.views && VIEW.at !== 0) { hideCard(); mode = 'moving'; VIEW.at = 0; await flyTo(c.pos, c.look); mode = 'room'; }
   if (mode === 'room') hideCard();
   if (mode === 'screen') hideRadarUi();
   mode = 'moving';
@@ -6496,22 +6783,188 @@ function showCard(id) {
   card.querySelector('[data-f="title"]').textContent = c.title;
   card.querySelector('[data-f="lede"]').textContent = c.lede;
   card.querySelector('[data-f="points"]').replaceChildren(...c.points.map((t) => Object.assign(document.createElement('li'), { textContent: t })));
+  const extra = card.querySelector('[data-f="extra"]'); if (extra) { extra.innerHTML = c.extra ?? ''; extra.hidden = !c.extra; } // (our own markup, from COURSES)
   card.dataset.side = c.side;
   document.getElementById('engineOpen').hidden = !c.engine;
   const views = document.getElementById('roomViews');
   views.hidden = !c.views;
-  if (c.views) card.querySelector('[data-f="views"]').replaceChildren(...c.views.map((v, i) => {
-    const b = Object.assign(document.createElement('button'), { type: 'button', textContent: v.label });
-    b.setAttribute('aria-pressed', String(i === 0));
-    b.addEventListener('click', () => goToView(c, i));
-    return b;
-  }));
+  if (c.views) {                                                   // fixed viewpoints, and the ride-alongs as their own group
+    const make = (v, i) => { const b = Object.assign(document.createElement('button'), { type: 'button' }); b.dataset.view = i;
+      b.innerHTML = v.follow ? `<span class="rc-ico" aria-hidden="true"></span><span>${v.label}</span>${v.follow === 'cadet' ? '<em>Guided</em>' : ''}` : `<span class="rc-n">${String(i + 1).padStart(2, '0')}</span><span>${v.label}</span>`;
+      b.setAttribute('aria-pressed', String(i === 0)); b.addEventListener('click', () => goToView(c, i)); return b; };
+    const all = c.views.map(make), rides = all.filter((_, i) => c.views[i].follow);
+    card.querySelector('[data-f="views"]').replaceChildren(...all.filter((_, i) => !c.views[i].follow));
+    card.querySelector('[data-f="rides"]').replaceChildren(...rides); card.querySelector('[data-f="rides-wrap"]').hidden = !rides.length;
+  }
   VIEW.at = 0;
   setCardCollapsed(false);
   card.hidden = false;
   requestAnimationFrame(() => card.classList.add('is-open'));
   document.getElementById('roomBack').focus({ preventScroll: true });
 }
+/* ---------- Into the screen: in Room A or B, scrolling flies the camera into the display; at the glass the page opens
+   in the screen's own navy and scrolls on (Lenis, GSAP ScrollTrigger animations); scrolling back past the top, the
+   back button or Esc fade it and ease the camera back out into the room. One continuous shot. ---------- */
+const DIVE = { room: null, phase: null, open: false, tl: null, up: 0, triggers: [], el: null, live: null, liveG: null, face: null, F: null };
+/** CSS-style cubic-bezier easing as a function (GSAP takes any function as an ease) */
+function cubicBezier(x1, y1, x2, y2) {
+  const f = (a, b, t) => 3 * a * (1 - t) * (1 - t) * t + 3 * b * (1 - t) * t * t + t * t * t;
+  return (x) => { if (x <= 0) return 0; if (x >= 1) return 1; let t = x;
+    for (let i = 0; i < 8; i++) { const d = (f(x1, x2, t + 1e-4) - f(x1, x2, t)) / 1e-4; if (!d) break; t -= (f(x1, x2, t) - x) / d; t = Math.min(1, Math.max(0, t)); }
+    return f(y1, y2, t); };
+}
+const DIVE_FILL = 0.88;                                            // the screen settles as a card filling 88% of the window
+const EASE_TRAVEL = cubicBezier(0.65, 0, 0.35, 1), EASE_ENTER = cubicBezier(0.22, 1, 0.36, 1); // travel; an entrance settling, no overshoot
+const _pc = new THREE.PerspectiveCamera(), _pv = new THREE.Vector3();
+/** where the screen sits once the camera has arrived (DIVE_FILL of the window across its binding side), in CSS px */
+function liveRect(id) {
+  const S = SCREEN_SPOTS[id], k = DIVE_FILL * (S.h / 2) / Math.max(S.h / 2, S.w / 2 / (innerWidth / innerHeight));
+  const h = innerHeight * k, w = h * S.w / S.h; return { x: (innerWidth - w) / 2, y: (innerHeight - h) / 2, w, h };
+}
+/** the screen's on-screen bounds for the camera as roomCam has it right now (the frame copies roomCam, so they
+ *  agree); null while any corner is behind the camera or beyond the far plane */
+function projRect(id) {
+  const S = SCREEN_SPOTS[id]; _pc.copy(camera); _pc.position.copy(roomCam.pos); _pc.lookAt(roomCam.look); _pc.updateMatrixWorld();
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { _pv.set(S.c.x + sx * S.w / 2, S.c.y + sy * S.h / 2, S.c.z).project(_pc);
+    if (_pv.z < -1 || _pv.z > 1) return null;
+    const px = (_pv.x + 1) / 2 * innerWidth, py = (1 - _pv.y) / 2 * innerHeight; x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py); }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+/** the live copy of the screen, laid over the 3D one: once the screen nears its final size it rides it in, the room
+ *  fades to the page's ground around it, and the soft magnified texture gives way to the sharp picture: the screen
+ *  has become the page. Driven by how big the screen looks, so the way out mirrors the way in exactly */
+function trackLive() {
+  const el = DIVE.el, F = DIVE.F; if (!el || !F) return;
+  const R = projRect(DIVE.room), o = R ? THREE.MathUtils.smoothstep(R.w / F.w, 0.8, 0.985) : 0;
+  el.style.opacity = o.toFixed(4); el.style.visibility = o > 0 ? 'visible' : 'hidden'; // set straight, every frame: no tween per update
+  if (o > 0) DIVE.live.style.transform = `translate3d(${(R.x - F.x).toFixed(2)}px, ${(R.y - F.y).toFixed(2)}px, 0) scale(${(R.w / F.w).toFixed(5)}, ${(R.h / F.h).toFixed(5)})`;
+}
+function placeLive() {
+  const F = (DIVE.F = liveRect(DIVE.room)), s = DIVE.live.style;
+  s.left = F.x + 'px'; s.top = F.y + 'px'; s.width = F.w + 'px'; s.height = F.h + 'px';
+}
+/** the live copy follows the 3D screen's own canvas (and Room B's photograph, where its panel sits: 60-620 px) */
+function drawLive(s) {
+  const g = DIVE.liveG; g.drawImage(s.g.canvas, 0, 0);
+  if (s.room === 'B' && DIVE.face?.complete && DIVE.face.naturalWidth) g.drawImage(DIVE.face, 60, 60, 560, 780);
+}
+/** Rooms A and B: the door's flight carries on through the room into the screen (enterRoom), and the page is built
+ *  ready to take over at the glass. Returns where the camera ends: square on, the screen filling DIVE_FILL */
+function beginDive(id) {
+  const S = SCREEN_SPOTS[id], tanv = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const d = Math.max(S.h / 2, S.w / 2 / camera.aspect) / tanv / DIVE_FILL;
+  DIVE.room = id; DIVE.phase = 'in';
+  if (id === 'B') DIVE.face ??= Object.assign(new Image(), { src: 'brand/founder.webp' });
+  const el = pageShell(id), src = SCREENS.find((q) => q.room === id);
+  DIVE.live.width = src.g.canvas.width; DIVE.live.height = src.g.canvas.height; drawLive(src);
+  placeLive(); el.style.opacity = '0'; el.style.visibility = 'hidden';
+  gsap.set(el.querySelector('.room-page__back'), { autoAlpha: 0 });
+  // the last stretch runs straight down the screen's axis, so the camera is square on before the hand-off starts
+  // (the sharp copy fades in from 80% of final size, i.e. from 1.25 d out)
+  const at = (k) => S.c.clone().add(new THREE.Vector3(0, 0, d * k));
+  return { path: [at(1.9), at(1.35), at(1)], toLook: S.c.clone() };
+}
+function pageShell(id) {
+  let el = document.getElementById('roomPage');
+  if (!el) { el = Object.assign(document.createElement('div'), { id: 'roomPage', className: 'room-page' }); document.body.appendChild(el); }
+  el.innerHTML = `<canvas class="rp-live" aria-hidden="true"></canvas><button type="button" class="room-page__back">← Back to lobby</button>
+    <div class="room-page__scroll"><div class="room-page__content"><section class="rp-screen" aria-hidden="true"><span class="rp-cue"></span></section>${ROOM_PAGES[id]()}</div></div>`;
+  el.querySelector('.room-page__back').addEventListener('click', () => closePage());
+  DIVE.live = el.querySelector('.rp-live'); DIVE.liveG = DIVE.live.getContext('2d');
+  return (DIVE.el = el);
+}
+/** the move has settled: the 3D rests under the page, which takes over with Lenis on its own scroller; the screen
+ *  stays as the opening section and recedes as you scroll on */
+function pageOpened() {
+  const el = DIVE.el, wrapper = el.querySelector('.room-page__scroll'), content = el.querySelector('.room-page__content');
+  DIVE.open = true; DIVE.phase = 'open'; el.classList.add('is-open');
+  DIVE.live.style.transform = '';
+  gsap.to(el.querySelector('.room-page__back'), { autoAlpha: 1, duration: 0.5, ease: EASE_ENTER });
+  const recede = (y) => { const q = Math.min(1, y / innerHeight), F = DIVE.F, sc = 1 - 0.06 * q;
+    DIVE.live.style.transform = `translate3d(${((1 - sc) * F.w / 2).toFixed(2)}px, ${(-y * 0.45 + (1 - sc) * F.h / 2).toFixed(2)}px, 0) scale(${sc.toFixed(5)})`;
+    DIVE.live.style.opacity = (1 - 0.85 * q).toFixed(3); };
+  if (!reduceMotion) {
+    DIVE.lenis = new Lenis({ wrapper, content, lerp: 0.09, smoothWheel: true, wheelMultiplier: 0.9 });
+    DIVE.lenis.on('scroll', (l) => { ScrollTrigger.update(); recede(l.scroll); });
+    DIVE.raf = (t) => DIVE.lenis?.raf(t * 1000); gsap.ticker.add(DIVE.raf);
+  } else wrapper.addEventListener('scroll', () => recede(wrapper.scrollTop), { passive: true });
+  DIVE.up = 0;
+  wrapper.addEventListener('wheel', (e) => { if (wrapper.scrollTop <= 2 && e.deltaY < 0) { DIVE.up += -e.deltaY; if (DIVE.up > 220) closePage(); } else DIVE.up = 0; }, { passive: true });
+  pageMotion(el, wrapper);
+  el.querySelector('.room-page__back').focus({ preventScroll: true });
+}
+/** back the way it came: the page glides up to the screen, the screen sinks back into the 3D one, and the camera
+ *  eases out into the room, the exact mirror of the way in, a touch quicker */
+function closePage(instant) {
+  const el = DIVE.el;
+  if (!DIVE.room) return;
+  const stopPage = () => { for (const t of DIVE.triggers) t.kill(); DIVE.triggers = []; if (DIVE.raf) gsap.ticker.remove(DIVE.raf); DIVE.raf = null; DIVE.lenis?.destroy(); DIVE.lenis = null; };
+  if (instant) { stopPage(); resetDive(); return; }
+  if (DIVE.phase === 'in') { if (DIVE.tl && !DIVE.tl.reversed()) DIVE.tl.timeScale(1.25).reverse(); return; }
+  if (DIVE.phase !== 'open') return;
+  DIVE.open = false; DIVE.phase = 'out'; el.classList.remove('is-open');            // the 3D wakes under the page
+  for (const t of DIVE.triggers) t.kill(); DIVE.triggers = [];
+  gsap.to(el.querySelector('.room-page__back'), { autoAlpha: 0, duration: 0.25 });
+  const wrapper = el.querySelector('.room-page__scroll'), y = wrapper.scrollTop;
+  const out = () => { stopPage(); wrapper.scrollTop = 0; DIVE.live.style.opacity = '1'; mode = 'moving'; roomTl?.timeScale(1.3).reverse(); };
+  if (y > 4 && DIVE.lenis) DIVE.lenis.scrollTo(0, { duration: Math.min(1.2, 0.5 + 0.25 * y / innerHeight), easing: EASE_TRAVEL, force: true, lock: true, onComplete: out });
+  else out();
+}
+/** back in the lobby: the page is cleared away */
+function resetDive() {
+  const el = DIVE.el;
+  if (el) { el.classList.remove('is-open'); el.style.opacity = '0'; el.style.visibility = 'hidden'; el.innerHTML = ''; }
+  DIVE.room = DIVE.phase = DIVE.F = DIVE.live = DIVE.liveG = DIVE.tl = null; DIVE.open = false;
+}
+addEventListener('resize', () => { if (DIVE.room && DIVE.live) { placeLive(); if (DIVE.open) DIVE.live.style.transform = ''; } });
+/** the page's motion: sections reveal as they scroll up, the path's line draws with the
+ *  scroll, numbers count up, the quote lights word by word */
+function pageMotion(el, scroller) {
+  const T = (o) => { const t = ScrollTrigger.create({ scroller, ...o }); DIVE.triggers.push(t); return t; };
+  el.querySelectorAll('[data-r], .rp-hero [data-fade], .rp-hero h1, .rp-hero .rp-photo').forEach((n) => { gsap.set(n, { y: 18, opacity: 0 });
+    T({ trigger: n, start: 'top 90%', once: true, onEnter: () => gsap.to(n, { y: 0, opacity: 1, duration: 1.0, ease: EASE_ENTER, delay: Math.min(3, +n.dataset.r || 0) * 0.05 }) }); });
+  el.querySelectorAll('.rp-line').forEach((path) => { const L = path.getTotalLength(); gsap.set(path, { strokeDasharray: L, strokeDashoffset: L });
+    const tw = gsap.to(path, { strokeDashoffset: 0, ease: 'none', paused: true }); T({ trigger: path.closest('section'), start: 'top 70%', end: 'bottom 60%', scrub: true, onUpdate: (s) => tw.progress(s.progress) }); });
+  el.querySelectorAll('[data-count]').forEach((n) => { const to = +n.dataset.count, o = { v: 0 };
+    T({ trigger: n, start: 'top 90%', once: true, onEnter: () => gsap.to(o, { v: to, duration: 1.6, ease: 'power2.out', onUpdate: () => { n.textContent = Math.round(o.v) + (n.dataset.suffix || ''); } }) }); });
+  el.querySelectorAll('.rp-quote').forEach((q) => { const ws = q.querySelectorAll('.qw');
+    const tw = gsap.fromTo(ws, { opacity: 0.18 }, { opacity: 1, stagger: 0.05, ease: 'none', paused: true }); T({ trigger: q, start: 'top 80%', end: 'bottom 45%', scrub: true, onUpdate: (s) => tw.progress(s.progress) }); });
+}
+const words = (s) => s.split(' ').map((w) => `<span class="wm"><span class="w">${w}</span></span>`).join(' ');
+const qwords = (s) => s.split(' ').map((w) => `<span class="qw">${w}</span>`).join(' ');
+const ROOM_PAGES = {
+  A: () => `
+  <section class="rp-hero"><p class="rp-eyebrow" data-fade>Room A · Cadet Prep</p><h1>${words('Which route is yours?')}</h1>
+    <p class="rp-lede" data-fade>Two routes lead to an airline’s right seat: the DGCA licence route, and an airline cadet programme. Cadet Prep is the dedicated pathway for the second, kept separate from the general DGCA question bank.</p>
+    </section>
+  <section class="rp-path"><h2 data-r>The licence route</h2>
+    <svg class="rp-svg" viewBox="0 0 20 1000" preserveAspectRatio="none" aria-hidden="true"><path class="rp-line" d="M10 0 V1000" /></svg>
+    <ol>${[['Class 12 with Physics and Maths', 'The academic requirement for a DGCA pilot licence.'], ['DGCA medical', 'A Class 2 medical to start; a Class 1 medical before the licence.'], ['DGCA ground examinations', 'Air navigation, meteorology, air regulations, the technical papers, and RTR.'], ['Flight training', '200 hours at a flight training organisation, in India or abroad.'], ['Commercial Pilot Licence', 'Issued by DGCA once training and examinations are complete.'], ['Type rating', 'Training on an airliner type, such as the A320 or the B737.'], ['First Officer', 'The right seat.']].map(([t, d], i) => `<li data-r><span class="rp-n">${String(i + 1).padStart(2, '0')}</span><div><h3>${t}</h3><p>${d}</p></div></li>`).join('')}</ol></section>
+  <section class="rp-cadet"><h2 data-r>The cadet route: selection, stage by stage</h2>
+    <p class="rp-sub" data-r>Selection comes first, then training on the airline’s own pathway. Stages differ from programme to programme.</p>
+    <div class="rp-grid">${[['Apply', 'Eligibility and documents'], ['Aptitude tests', 'Maths, physics, reasoning, English'], ['Assessment', 'Psychometric and pilot aptitude'], ['Group discussion & interview', 'How you think, speak and work in a team'], ['Medical', 'DGCA Class 1'], ['Training', 'On the airline’s pathway']].map(([t, d], i) => `<article data-r="${i}" class="${i >= 1 && i <= 3 ? 'is-prep' : ''}"><span>Stage ${i + 1}</span><h3>${t}</h3><p>${d}</p>${i >= 1 && i <= 3 ? '<em>Practised in Room A</em>' : ''}</article>`).join('')}</div></section>
+  <section class="rp-offer"><h2 data-r>What Cadet Prep gives you</h2>
+    <div class="rp-cards">${[['Aptitude practice', 'Reasoning, numerical and verbal drills, timed like the real tests.'], ['Group discussion', 'Practice rounds with guidance on structure and teamwork.'], ['Interview panels', 'Mock interviews and personal preparation resources.'], ['Programme updates', 'Selection dates and requirements, with dates and sources.']].map(([t, d], i) => `<article data-r="${i}"><h3>${t}</h3><p>${d}</p></article>`).join('')}</div>
+    <p class="rp-note" data-r>Requirements change: always check the airline’s and DGCA’s current rules.</p></section>
+  <section class="rp-cta"><h2 data-r>Start your preparation</h2><a class="btn" href="https://nikunj69420.github.io/aviationspot/#board" data-r>Join early access</a></section>`,
+  B: () => `
+  <section class="rp-hero rp-hero--mentor"><img class="rp-photo" src="brand/founder.webp" alt="Capt. Choudhary Sourabh">
+    <div><p class="rp-eyebrow" data-fade>Room B · 1-on-1 Mentorship</p><h1>${words('Capt. Choudhary Sourabh')}</h1>
+    <p class="rp-role" data-fade>“Flyboy” · CEO &amp; Founder · Boeing 737 type-rated pilot · First Officer (NSOP)</p>
+    <p class="rp-lede" data-fade>He started with no aviation background and no connections. Today he mentors students, cadets and parents through the decisions he once had to make alone.</p></div></section>
+  <section class="rp-quote-wrap"><p class="rp-quote">${qwords('“You don’t need to be born into aviation to build a future in aviation. You need the right mindset, the courage to begin, the discipline to continue and the awareness to make the right decisions.”')}</p></section>
+  <section class="rp-path rp-path--short"><h2 data-r>His journey</h2>
+    <svg class="rp-svg" viewBox="0 0 20 1000" preserveAspectRatio="none" aria-hidden="true"><path class="rp-line" d="M10 0 V1000" /></svg>
+    <ol>${[['2021', 'Finished higher secondary, and found aviation through his sister’s dream'], ['2022', 'Began flight training'], ['2023', 'Completed flying training in about nine months, delays included'], ['Next', 'Boeing 737 type rating, then First Officer with an NSOP'], ['5 April 2024', 'Started AviationSpot360: the Airspace of Awareness']].map(([t, d]) => `<li data-r><span class="rp-n">${t}</span><div><p>${d}</p></div></li>`).join('')}</ol></section>
+  <section class="rp-offer"><h2 data-r>How mentorship works</h2>
+    <div class="rp-cards">${[['Choose a session', 'Career guidance, subject doubts, a topic, or a full mentorship programme.'], ['Pick an open slot', 'From the mentor’s published availability.'], ['Confirm your booking', 'With the details sent to you.'], ['Meet 1-on-1', 'Questions answered, without long message threads.']].map(([t, d], i) => `<article data-r="${i}"><span class="rp-step">${i + 1}</span><h3>${t}</h3><p>${d}</p></article>`).join('')}</div></section>
+  <section class="rp-since"><p class="rp-eyebrow" data-r>Since 5 April 2024</p><h2 data-r>What we started</h2>
+    <ul>${['Dedicated aviation mentorship for students, cadets and parents', 'Self-study mentorship programmes for DGCA preparation', 'Recalled DGCA questions shared after every examination'].map((t, i) => `<li data-r="${i}">${t}</li>`).join('')}
+      <li data-r="3"><b><span data-count="89" data-suffix="%">0%</span></b> reported accuracy (85–89%) on weekly WPC RTR predicted papers</li></ul>
+    <p class="rp-big" data-r>Facts over false promises.</p></section>
+  <section class="rp-cta"><h2 data-r>Talk to a mentor</h2><a class="btn" href="https://nikunj69420.github.io/aviationspot/#board" data-r>Join early access</a></section>`,
+};
 function hideCard() {
   card.classList.remove('is-open');
   setTimeout(() => { if (!card.classList.contains('is-open')) card.hidden = true; }, 500);
@@ -6524,7 +6977,7 @@ function setCardCollapsed(on) {
 }
 document.getElementById('roomToggle').addEventListener('click', () => setCardCollapsed(!card.classList.contains('is-collapsed')));
 document.getElementById('roomBack').addEventListener('click', leaveRoom);
-addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; if (engineOpen) closeEngine(); else leaveRoom(); });
+addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; if (DIVE.room) closePage(); else if (engineOpen) closeEngine(); else leaveRoom(); });
 document.querySelectorAll('[data-room]').forEach((b) => b.addEventListener('click', () => enterRoom(b.dataset.room)));
 
 // Pointer picking on the door leaves, only once the walk has arrived in front of them
@@ -6556,7 +7009,8 @@ document.body.appendChild(TIP);
 function hideTip() { TIP.style.opacity = '0'; }
 const PLACES = () => [
   [-805, 31, -34, 'Control tower', 'Air traffic control clears every take-off and landing: you will learn the radio calls in ground school.'],
-  [-1490, 5, -30, 'Flying club', 'Where cadets brief, debrief and wait for the weather.'],
+  [-236, 5, -36, 'Flying club', 'Where cadets brief, debrief and wait for the weather.'],
+  [-60, 3, -58, 'The school’s ramp', 'The trainers, chocked and tied down: every flight starts with a walk-round here.'],
   [-1060, 9, -30, 'Terminal', 'Regional airline flights: the career most cadets train for.'],
   [-1390, 7, -30, 'Fire station', 'Airport rescue and fire-fighting cover, on call whenever aircraft fly.'],
   [-1640, 9, -40, 'Fuel farm', 'Avgas for the trainers, Jet A-1 for the airliners.'],
@@ -6599,6 +7053,7 @@ function frame() {
   // Drop resolution once if this device can't keep up
   const now = FILM.clock ?? performance.now(), dt = FILM.clock != null ? 1000 / 30 : now - lastT; lastT = now; NOW = now; CLOUD_T.value = now / 1000;
   if (engineOpen && engineOv.classList.contains('is-open')) return; // the simulator has the GPU while it is open
+  if (DIVE.open) { tickScreens(now); return; }                     // so does a room's page: the room rests under it
   if (DESK_ENGINE.mixer && camera.position.z < -14 && camera.position.x > 0) DESK_ENGINE.mixer.update(Math.min(dt, 100) / 1000);
   if (document.visibilityState === 'visible' && ++frames > 30 && frames < 240) {
     slowTime = slowTime * 0.9 + dt * 0.1;
@@ -6622,6 +7077,7 @@ function frame() {
     lastWalk.look.copy(tmpLook);
   } else {
     if (FOLLOW.kind && mode === 'room') updateFollow(dt);
+    camVelocity(now, dt);
     camera.position.copy(roomCam.pos);
     tmpLook.copy(roomCam.look);
   }
@@ -6695,6 +7151,7 @@ function frame() {
   updateGrass(now);
   updateStreet(now);
   updateCountryLife(now, dt);
+  tickScreens(now);
   updateSound();
   renderFrame(now, dt, outdoors, out);
 }
